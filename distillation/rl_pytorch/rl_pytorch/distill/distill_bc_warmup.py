@@ -245,7 +245,7 @@ class DistillWarmUpTrainer:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.is_testing = is_testing
-        self.current_learning_iteration = 17450
+        self.current_learning_iteration = 0
 
         self.apply_reset = apply_reset
         self.teacher_resume = teacher_resume
@@ -399,7 +399,36 @@ class DistillWarmUpTrainer:
 
         self.save(os.path.join(self.student_log_dir,
                                    'model_bc_{}'.format(num_learning_iterations)))
+    def dagger_run(self, num_learning_iterations, log_interval=1):
+        current_obs = self.vec_env.reset()
+        current_states = self.vec_env.env.get_state()
 
+        self.num_teacher_transitions = 102400000
+        self.num_batch = 125 
+        self.dagger_it = -1
+        dagger_update_interval = 10
+
+        for it in range(self.current_learning_iteration, num_learning_iterations):
+            # Learning step
+            start = time.time()
+
+            mean_loss = self.dagger_update(it, self.dagger_it)
+
+            stop = time.time()
+            learn_time = stop - start
+            if self.print_log:
+                self.log(locals())
+            if it % log_interval == 0:
+                self.save(os.path.join(self.student_log_dir,
+                                        'model_bc_{}'.format(it)))
+            if it % dagger_update_interval == 0 and it != 0:
+                print("DAGGER UPDATE")
+                self.dagger_it += 1
+                self.collect_dagger_rollouts(horizon=1, dagger_it=self.dagger_it)
+
+        self.save(os.path.join(self.student_log_dir,
+                                   'model_bc_{}'.format(num_learning_iterations)))
+        
     def log(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_transitions_per_env * self.vec_env.env.num_envs
         self.tot_time += locs['learn_time']
@@ -542,6 +571,114 @@ class DistillWarmUpTrainer:
 
         return mean_bc_loss
     
+    def dagger_update(self, it, cur_dag_it):
+        mean_bc_loss = 0
+
+        batch = self.mini_batch_generator(self.num_mini_batches)
+        teacher_obs_storage, teacher_actions_storage, teacher_sigmas_storage, teacher_pointcloud_storage = [], [], [], []
+        teacher_file_list = os.listdir(self.teacher_data_dir)
+        fresh_dagger_file_list = [f for f in teacher_file_list if f.startswith(f"dagger_{cur_dag_it}_")]
+        #new list without fresh dagger files
+        teacher_file_list = [f for f in teacher_file_list if not f.startswith(f"dagger_{cur_dag_it}_")]
+        for idx_worker in range(self.mini_data_size):
+            if idx_worker < self.mini_data_size // 2 and  len(fresh_dagger_file_list) > 0:
+                load_dir = os.path.join(self.teacher_data_dir, random.choice(fresh_dagger_file_list))
+            else:
+                load_dir = os.path.join(self.teacher_data_dir, random.choice(teacher_file_list)) 
+            teacher_obs_tmp, teacher_actions_tmp, teacher_sigmas_tmp, teacher_pointcloud_tmp = torch.load(load_dir) 
+            teacher_obs_storage.extend(teacher_obs_tmp.cpu())
+            teacher_actions_storage.extend(teacher_actions_tmp.cpu())
+            # teacher_expert_obs_storage.extend(teacher_expert_obs_tmp.cpu())
+            teacher_sigmas_storage.extend(teacher_sigmas_tmp.cpu())
+            teacher_pointcloud_storage.extend(teacher_pointcloud_tmp.cpu())
+
+        teacher_obs_storage = torch.stack(teacher_obs_storage, dim=0)
+        teacher_actions_storage = torch.stack(teacher_actions_storage, dim=0)
+        # teacher_expert_obs_storage = torch.stack(teacher_expert_obs_storage, dim=0)
+        teacher_sigmas_storage = torch.stack(teacher_sigmas_storage, dim=0)
+        teacher_pointcloud_storage = torch.stack(teacher_pointcloud_storage, dim=0)
+        
+        if self.ablation_mode == "no-tactile":
+            teacher_obs_storage = torch.cat([teacher_obs_storage[:, :45], teacher_obs_storage[:, 61:130],
+                                                teacher_obs_storage[:, 146:215], teacher_obs_storage[:, 231:300], 
+                                                teacher_obs_storage[:, 316:]], dim=-1)
+            teacher_pointcloud_storage = teacher_pointcloud_storage[:, :680, :]
+            print(teacher_obs_storage.shape, teacher_actions_storage.shape, teacher_sigmas_storage.shape, teacher_pointcloud_storage.shape)
+        elif self.ablation_mode == "multi-modality-plus":
+            print(teacher_obs_storage.shape, teacher_actions_storage.shape, teacher_sigmas_storage.shape, teacher_pointcloud_storage.shape)
+        elif self.ablation_mode == "aug":
+            teacher_pointcloud_storage = teacher_pointcloud_storage[:, :680, :]
+            print(teacher_obs_storage.shape, teacher_actions_storage.shape, teacher_sigmas_storage.shape, teacher_pointcloud_storage.shape)
+        elif self.ablation_mode == "no-pc":
+            print(teacher_obs_storage.shape, teacher_actions_storage.shape, teacher_sigmas_storage.shape)
+        else:
+            raise NotImplementedError
+
+        self.num_learning_epochs = 1
+        for epoch in range(self.num_learning_epochs):
+            print("UPDATE START EPOCH", epoch)
+            for batch_idx, indices in enumerate(batch):
+                teacher_obs_batch = teacher_obs_storage[indices].to(self.device)
+                teacher_actions_batch = teacher_actions_storage[indices].to(self.device)
+                # teacher_expert_obs_batch = teacher_expert_obs_storage[indices].to(self.device)
+                teacher_sigmas_batch = teacher_sigmas_storage[indices].to(self.device)
+                if self.ablation_mode != "no-pc": 
+                    teacher_pointcloud_batch = teacher_pointcloud_storage[indices].to(self.device)
+                    student_obs_batch = {'obs': teacher_obs_batch, 'pointcloud': teacher_pointcloud_batch}
+                    if teacher_pointcloud_batch.shape[1] == 808:
+                        for i in range(teacher_pointcloud_batch.shape[0]):  # remove padded points
+                            zeros = torch.where(teacher_pointcloud_batch[i, :, :3] == -torch.tensor([5.7225e-01, 1.0681e-04, 1.7850e-01]).cuda())
+                            teacher_pointcloud_batch[i][zeros[0]] = teacher_pointcloud_batch[i, 0, :].clone()
+                            zeros2 = torch.where(teacher_pointcloud_batch[i, :, :3] == -torch.tensor([5.3432e-01, -1.5243e-06, 2.0256e-01]).cuda())
+                            teacher_pointcloud_batch[i][zeros2[0]] = teacher_pointcloud_batch[i, 0, :].clone()
+                else:
+                    student_obs_batch = teacher_obs_batch
+                # with torch.no_grad():
+                #     tmp_obs = {
+                #         'obs': teacher_expert_obs_batch,}
+                #     teacher_res_dict = self.get_action_values(self.teacher_actor_critic, tmp_obs, mode='teacher')
+                #     teacher_actions = res_dict['actions']
+                
+                #print mean difference between teacher actions and teachers expert actions batch
+                # print("Teacher actions mean difference:", torch.abs(teacher_actions - teacher_actions_batch).mean().item())
+                
+                res_dict = self.calc_gradients(self.student_actor_critic, student_obs_batch, teacher_actions_batch)
+
+                mu_batch = res_dict['mus']
+                sigma_batch = res_dict['sigmas']
+
+
+                # print("std of teacher actions:", torch.clamp(teacher_actions_batch, -1.0, 1.0).std())
+                # print("average of teacher actions:", torch.clamp(teacher_actions_batch, -1.0, 1.0).mean())
+
+                # print("std of student actions:", mu_batch.std())
+                # print("average of student actions:", mu_batch.mean())
+
+                # close_mask   = teacher_actions_batch.abs() >= 0.99            # bool tensor
+                # num_close    = close_mask.sum().item()          # total saturated scalars
+                # total_vals   = teacher_actions_batch.numel()
+                # pct_close    = 100.0 * num_close / total_vals   # percentage
+
+                # print(f"{num_close:,}/{total_vals:,} "
+                #     f"values are within ±0.05 of the rail  "
+                #     f"({pct_close:.1f} %).")
+
+                # Imitation loss
+                bc_loss = torch.sum(self.recon_criterion(mu_batch, torch.clamp(teacher_actions_batch, -1.0, 1.0)), dim=-1).mean() 
+                loss = self.bc_loss_coef * bc_loss
+                # Gradient step
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(
+                        self.student_actor_critic.parameters(), self.max_grad_norm)
+                self.optimizer.step()
+
+                mean_bc_loss += bc_loss.item()
+        num_updates = self.num_learning_epochs * self.num_mini_batches
+        mean_bc_loss /= num_updates
+
+        return mean_bc_loss
+
     @torch.no_grad()
     def evaluate_student(self,
                         n_spots: int = 500,
@@ -617,7 +754,8 @@ class DistillWarmUpTrainer:
     @torch.no_grad()
     def collect_dagger_rollouts(self,
                                 horizon: int = 5000,
-                                save_every: int = 200):
+                                save_every: int = 200,
+                                dagger_it: int = 0):
         """
         DAgger collection that matches DistillCollector.run storage format:
             tuple(obs, teacher_mus, teacher_sigmas, pointcloud)
@@ -639,7 +777,7 @@ class DistillWarmUpTrainer:
         reward_sum = []
         episode_length = []
 
-        for it in range(0, 200):
+        for it in range(0, horizon):
             # report_gpu()
             ep_infos = []
 
@@ -713,7 +851,7 @@ class DistillWarmUpTrainer:
                     for key in storage.keys():
                         storage[key] = torch.stack(storage[key], dim=0)
                         print(storage[key].shape)
-                    save_dir = os.path.join(self.teacher_data_dir, "dagger_{}_{}_{}.pt".format(1, it, int((i-199)/200)))
+                    save_dir = os.path.join(self.teacher_data_dir, "dagger_{}_{}_{}.pt".format(dagger_it, it, int((i-199)/200)))
                     torch.save((storage['obs'], storage['actions'], storage['sigmas'], storage['pointcloud']), save_dir)  
                     storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': []} 
                     reward_sum = []

@@ -736,7 +736,7 @@ class AllegroArmMOAR(VecTask):
                                                         device=self.device)
 
             # add object
-            obj_class_indice = 1 #np.random.randint(0, len(self.used_training_objects), 1)[0]
+            obj_class_indice = np.random.randint(0, len(self.used_training_objects), 1)[0]
             select_obj = self.used_training_objects[obj_class_indice]
             # randomize initial quat
             if self.object_set_id == "cross" or self.object_set_id == "custom": 
