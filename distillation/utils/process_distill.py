@@ -58,7 +58,8 @@ def process_distill_trainer(env, cfg_train, teacher_logdir, student_logdir, teac
             teacher_data_dir=teacher_data_dir,
             worker_id=worker_id,
             warmup_mode=warmup_mode,
-            ablation_mode=ablation_mode
+            ablation_mode=ablation_mode,
+            student_resume = cfg_train.get("student_resume", "None"),
         )
     elif bc_training == "collect":
         distill_trainer = DistillCollector(

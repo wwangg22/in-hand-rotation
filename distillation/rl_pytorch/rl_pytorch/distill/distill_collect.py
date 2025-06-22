@@ -71,6 +71,8 @@ class DistillCollector:
         self.observation_space = vec_env.env.observation_space
         self.action_space = vec_env.env.action_space
         self.state_space = vec_env.env.state_space
+        print("Observation space:", self.observation_space)
+        print("Action space:", self.action_space)
 
         self.device = device
         self.desired_kl = desired_kl
@@ -144,6 +146,9 @@ class DistillCollector:
             self.teacher_obs_shape = self.obs_shape['obs']
         else:
             self.teacher_obs_shape = self.obs_shape
+        # print("Teacher observation shape:", self.teacher_obs_shape)
+        # print("Observation shape:", self.obs_shape)
+        # exit()
         self.teacher_build_config = {
             'actions_num': self.actions_num,
             'input_shape': self.teacher_obs_shape,
@@ -387,7 +392,7 @@ class DistillCollector:
                     for key in storage.keys():
                         storage[key] = torch.stack(storage[key], dim=0)
                         print(storage[key].shape)
-                    save_dir = os.path.join(self.teacher_data_dir, "teacher_batch_{}_{}.pt".format(self.worker_id, int((i-199)/200)))
+                    save_dir = os.path.join(self.teacher_data_dir, "teacher_batch_{}_{}_{}.pt".format(self.worker_id, it, int((i-199)/200)))
                     torch.save((storage['obs'], storage['actions'], storage['sigmas'], storage['pointcloud']), save_dir)  
                     storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': []} 
                     reward_sum = []

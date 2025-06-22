@@ -27,3 +27,5 @@ pip install hydra-core gym ray open3d numpy==1.20.3 tensorboardX tensorboard wan
 ```
 
 You are all set now! Follow the main instructions to continue the exploration journey.
+
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json

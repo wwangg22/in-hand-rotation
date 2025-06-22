@@ -12,13 +12,13 @@ distill:
   bc_training: False
   warmup_mode: label
   ablation_mode: multi-modality
-  teacher_data_dir: demonstration-baoding  
+  teacher_data_dir: demonstration-baoding-2
   worker_id: 0
   bc_warmup: True
-  teacher_logdir: runs
-  student_logdir: runs/student/new-no-vision
-  teacher_resume: baoding
-  student_resume: None
+  teacher_logdir: /home/william/Desktop/USC/in-hand-rotation/runs/baoding/baodingS1.0_C0.0_M0.02025-06-08_19-28-12-3278/nn
+  student_logdir: runs/student/bc-baoding-multimodplus-2 #runs/student/new-no-vision-2  
+  teacher_resume: last_baoding_ep_5300_rew_1268.9863
+  student_resume: model_bc_6000
   vidlogdir: 'video'
   vid_log_step: 500
   log_video: False
@@ -31,7 +31,7 @@ distill:
     use_fake_done: True
 
     # number of policy updates
-    max_iterations: 20000
+    max_iterations: 40000
 
     # training params
     bc_loss_coef: 1.0

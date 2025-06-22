@@ -30,6 +30,7 @@ import pickle
 import numpy as np
 import os
 import torch
+import math
 
 from isaacgym import gymtorch
 from isaacgym import gymapi
@@ -109,6 +110,10 @@ class AllegroArmMOAR(VecTask):
             self.rotation_id = 0
         elif self.rotation_axis == "y":
             self.rotation_id = 1
+        elif self.rotation_axis == "custom":
+            self.plane_point  = torch.zeros((self.cfg["env"]["numEnvs"], 3), device="cuda:0")
+            self.plane_normal = torch.zeros((self.cfg["env"]["numEnvs"], 3), device="cuda:0")
+            self.rotation_id = 2
         else:
             self.rotation_id = 2
 
@@ -134,6 +139,7 @@ class AllegroArmMOAR(VecTask):
         self.vel_coef = self.cfg["env"].get("vel_coef", -0.3)
         self.torque_coef = self.cfg["env"].get("torque_coef", -0.01)
         self.work_coef = self.cfg['env'].get("work_coef", -0.0002)
+        self.misalign_coef = self.cfg['env'].get("misalign_coef", -1.0)
         self.finger_coef = self.cfg['env'].get('finger_coef', 0.1)
         self.latency = self.cfg['env'].get("latency", 0.25)
 
@@ -164,7 +170,9 @@ class AllegroArmMOAR(VecTask):
             "set_obj7_block": "urdf/objects/set_obj7_block.urdf",
             "set_obj8_short_block": "urdf/objects/set_obj8_short_block.urdf",
             "set_obj9_thin_block": "urdf/objects/set_obj9_thin_block.urdf",
-            "cross4_0": "urdf/objects/cross4_0.urdf", "cross4_1": "urdf/objects/cross4_1.urdf", "cross4_2": "urdf/objects/cross4_2.urdf", "cross4_3": "urdf/objects/cross4_3.urdf", "cross4_4": "urdf/objects/cross4_4.urdf"
+            "cross4_0": "urdf/objects/cross4_0.urdf", "cross4_1": "urdf/objects/cross4_1.urdf", "cross4_2": "urdf/objects/cross4_2.urdf", "cross4_3": "urdf/objects/cross4_3.urdf", "cross4_4": "urdf/objects/cross4_4.urdf",
+            "custom_obj1_cylinder": "urdf/objects/custom_obj1_cylinder.urdf",
+            "cup": "urdf/objects/model.urdf",
         }
 
         self.object_sets = {
@@ -175,7 +183,8 @@ class AllegroArmMOAR(VecTask):
                   'set_obj7_block', 'set_obj8_short_block', 'set_obj9_thin_block',
                   'set_obj10_thin_block_corner', 'set_obj11_cylinder', 'set_obj12_cylinder_corner',
                   'set_obj13_irregular_block', 'set_obj14_irregular_block_cross', 'set_obj15_irregular_block_time',
-                  'set_obj16_cylinder_axis']
+                  'set_obj16_cylinder_axis'],
+            "custom": ["custom_obj1_cylinder", "cup"]
         }
 
         self.object_set_id = self.cfg["env"].get("objSet", "0")
@@ -394,16 +403,20 @@ class AllegroArmMOAR(VecTask):
             self.use_disable = True
             self.disable_sensor_idxes = torch.tensor(self.disable_sets[self.disable_mode],
                                                      dtype=torch.long, device=self.device)
-
         if self.rotation_axis == "x":
             self.all_spin_choices = torch.tensor([[1.0, 0.0, 0.0]], device=self.device)
 
         elif self.rotation_axis == "y":
             self.all_spin_choices = torch.tensor([[0.0, -1.0, 0.0]], device=self.device)
 
-        elif self.rotation_axis == "z":
+        elif self.rotation_axis == "z" :
+            # if self.object_set_id == "custom":
+            #     self.all_spin_choices = torch.tensor([[1.0, 0.0, 0.0]], device=self.device)
+            # else:
             self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0]], device=self.device)
 
+        elif self.rotation_axis == "custom":
+            self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0]], device=self.device)
         else:
             assert False, "wrong spin axis"
 
@@ -494,12 +507,34 @@ class AllegroArmMOAR(VecTask):
         plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
         self.gym.add_ground(self.sim, plane_params)
 
+    def _draw_plane(self, env_id, env_ptr, colour=(0.1, 0.6, 0.9),
+                    half_w=0.075, half_h=0.075):
+        """Draw a thin rectangle that represents the plane."""
+        c = self.plane_point[env_id]          # centre
+        n = self.plane_normal[env_id]         # normal (unit)
+
+        # build orthonormal basis (u,v,n)
+        u = torch.cross(n, self.z_unit_tensor[env_id])
+        if torch.norm(u) < 1e-3:              # n almost ‖ z
+            u = torch.cross(n, self.y_unit_tensor[env_id])
+        u = torch.nn.functional.normalize(u, dim=0)
+        v = torch.cross(n, u)
+
+        p1 = (c +  half_w*u +  half_h*v).cpu().numpy()
+        p2 = (c -  half_w*u +  half_h*v).cpu().numpy()
+        p3 = (c -  half_w*u -  half_h*v).cpu().numpy()
+        p4 = (c +  half_w*u -  half_h*v).cpu().numpy()
+
+        verts = [*p1, *p2, *p2, *p3, *p3, *p4, *p4, *p1]  # 4 edges
+        self.gym.add_lines(self.viewer, env_ptr, 4, verts, colour)
+
     def create_object_asset_dict(self, asset_root):
         self.object_asset_dict = {}
         print("ENTER ASSET CREATING!")
         for used_objects in self.used_training_objects:
             object_asset_file = self.asset_files_dict[used_objects]
             object_asset_options = gymapi.AssetOptions()
+            
 
             object_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
 
@@ -686,13 +721,35 @@ class AllegroArmMOAR(VecTask):
                 self.gym.set_rigid_body_segmentation_id(env_ptr, arm_hand_actor, rb, 2)
             self.hand_indices.append(hand_idx)
 
+            if self.rotation_axis == "custom":
+                origin = self.gym.get_env_origin(env_ptr)   # Vec3 world origin of this env
+
+                # tuned local offsets you want (metres, in the env frame)
+                x_off, y_off, z_off = 0.60, -0.10, 0.25      # example values you “hand-tune”
+
+                # store world-space point
+                self.plane_point[i] = torch.tensor(
+                    [x_off, y_off, z_off],
+                    device=self.device)
+
+                self.plane_normal[i] = torch.tensor([0.0, -1.0, 0.0],
+                                                        device=self.device)
+
             # add object
-            obj_class_indice = np.random.randint(0, len(self.used_training_objects), 1)[0]
+            obj_class_indice = 1 #np.random.randint(0, len(self.used_training_objects), 1)[0]
             select_obj = self.used_training_objects[obj_class_indice]
             # randomize initial quat
-            if self.object_set_id == "cross": 
+            if self.object_set_id == "cross" or self.object_set_id == "custom": 
                 init_theta = random.uniform(-np.pi / 2, np.pi / 2)
-                object_start_pose.r = gymapi.Quat(0, 0, np.cos(init_theta), np.sin(init_theta))
+
+                # init_theta = np.pi / 4
+                # object_start_pose.r = gymapi.Quat(0, 0, np.cos(init_theta * 0.5), np.sin(init_theta * 0.5))
+                object_start_pose.r = gymapi.Quat.from_axis_angle(      # q_spin  =  Rz(init_theta)
+                    gymapi.Vec3(0, 0, 1),
+                    init_theta
+                )
+
+               
 
             if self.object_set_id == "ball":
                 init_theta = random.uniform(-np.pi, np.pi)
@@ -853,132 +910,243 @@ class AllegroArmMOAR(VecTask):
         self.arm_hand_dof_default_pos = to_torch(arm_hand_dof_default_pos, device=self.device)
         self.arm_hand_dof_default_vel = to_torch(arm_hand_dof_default_vel, device=self.device)
 
+
+    def _cyl_support(dist_dir, axis, R, H):
+        """
+        dist_dir: (N,3) unit vectors (here the plane normal)
+        axis    : (N,3) unit vectors, cylinder axes in world frame
+        R       : scalar or (N,)  radius  (metres)
+        H       : scalar or (N,)  half-length (metres)
+
+        returns: (N,) — how far the furthest point on the cylinder surface
+                        lies in +dist_dir from the COM.
+        """
+        # |n·u| tells how much of the axis projects onto n
+        c = torch.abs((dist_dir * axis).sum(-1))                # (N,)
+        # radial component √(1-c²) and axial component |c|
+        return R * torch.sqrt(1.0 - c*c) + H * c
+    
+    def plane_crossing_reward(self):
+        """
+        Reward in [0,1] proportional to how much of each cylinder is beyond
+        the plane (higher is better).
+        """
+
+        p, n = self.plane_point, self.plane_normal                    # (N,3)
+
+        pos = self.object_pos                                          # COM (N,3)
+        quat = self.object_rot                                          # xyzw
+        u_local = torch.tensor([1., 0., 0.], device=self.device)        # cylinder’s
+        axis = quat_apply(quat, u_local)                                # axis in world
+
+        R =  0.022 #self.cfg["env"]["cylinderRadius"]                           # scalar
+        H =  0.15 #0.5 * self.cfg["env"]["cylinderLength"]                     # half-length
+
+        d = ((pos - p) * n).sum(-1)                                      # (N,)
+
+        s = _cyl_support(n, axis, R, H)                                  # (N,)
+
+        # how much of the solid is past the plane
+        #   fully past   :  d ≥  s      → reward 1
+        #   fully before :  d ≤ –s      → reward 0
+        #   partial      :  linear in between
+        penetration = (d + s).clamp_(0.0, 2*s)                          # (N,)
+        frac_volume = penetration / (2*s)                               #   ∈[0,1]
+
+        return frac_volume                                               # (N,)
+
     def compute_reward(self, actions):
         self.control_error = torch.norm(self.cur_targets - self.arm_hand_dof_pos, dim=1)
 
-        # Lets do some calculation
+        if self.rotation_axis == "custom":
+            # ------------------------------------------------------------------
+            # 1. Geometry of the training cylinder
+            # ------------------------------------------------------------------
+            R = torch.tensor(self.cfg["env"].get("cylinderRadius", 0.02),
+                            device=self.device)
+            H = torch.tensor(0.5 * self.cfg["env"].get("cylinderLength", 0.10),
+                            device=self.device)                      # half-length
 
-        if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
-            last_relative_pos = self.last_object_pos[:, 1] - self.last_object_pos[:, 0]
-            relative_pos = self.object_pos[:, 1] - self.object_pos[:, 0]
-            last_relative_pos = torch.nn.functional.normalize(last_relative_pos, dim=-1)
-            relative_pos = torch.nn.functional.normalize(relative_pos, dim=-1)
-            zero_pos = torch.zeros_like(relative_pos)
-            zero_pos[:, 1] = -1.
+            # ------------------------------------------------------------------
+            # 2. Cylinder’s local +X axis → world frame
+            # ------------------------------------------------------------------
+            u_local   = self.object_rot.new_tensor([1.0, 0.0, 0.0]).expand(self.object_rot.size(0), 3)
+            cyl_axis  = quat_apply(self.object_rot, u_local)          # (N,3)
+            cyl_axis  = torch.nn.functional.normalize(cyl_axis, dim=-1)
 
-            last_dot = torch.tensor([torch.dot(zero_pos[i], last_relative_pos[i]).item() for i in range(zero_pos.shape[0])]).unsqueeze(1).to(self.device)
-            last_cross = torch.cross(zero_pos, last_relative_pos)
-            last_relative_rot = torch.cat([last_cross, 1+last_dot], dim=-1)
-            last_relative_rot = torch.nn.functional.normalize(last_relative_rot, dim=-1)
+            # ------------------------------------------------------------------
+            # 3. Signed COM distance to the plane  ( + = reward side )
+            # ------------------------------------------------------------------
+            n = self.plane_normal                                     # (N,3)
+            p = self.plane_point                                      # (N,3)
+            d = ((self.object_pos - p) * n).sum(-1)                   # (N,)
 
-            dot = torch.tensor([torch.dot(zero_pos[i], relative_pos[i]).item() for i in range(zero_pos.shape[0])]).unsqueeze(1).to(self.device)
-            cross = torch.cross(zero_pos, relative_pos)
-            relative_rot = torch.cat([cross, 1+dot], dim=-1)
-            relative_rot = torch.nn.functional.normalize(relative_rot, dim=-1)
-        
-        # Generate a normal vector to the spinning axis.
-        tmp_vector = self.spin_axis + torch.randn_like(self.spin_axis)  
-        vector_1 = torch.cross(self.spin_axis, tmp_vector)
-        vector_1 = torch.nn.functional.normalize(vector_1, dim=-1)
+            # Support value of the cylinder along +n
+            c = torch.abs((cyl_axis * n).sum(-1))                     # |n·u|
+            s = R * torch.sqrt(1.0 - c*c) + H * c                     # (N,)
 
-        # Generate another vector to form a basis [spin_axis, v1, v2]
-        vector_2 = torch.cross(self.spin_axis, vector_1)
-        vector_2 = torch.nn.functional.normalize(vector_2, dim=-1)
-        
-        if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
-            inverse_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(last_relative_rot)).transpose(1, 2)
-            forward_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(relative_rot))
+            # ------------------------------------------------------------------
+            # 4. Fraction of volume past the plane  (in [0,1])
+            # ------------------------------------------------------------------
+            d_plus_s   = d + s
+            penetration = torch.min( d_plus_s.clamp_min_(0.0), 2.0 * s )
+            frac_volume = penetration / (2.0 * s + 1e-6)              # (N,)
+
+            torque_penalty  = (self.torques ** 2).sum(-1)                     # (N,)
+            work_penalty    = (self.torques.abs() * self.dof_vel_finite_diff.abs()).sum(-1)
+            action_penalty  = (actions ** 2).sum(-1)
+
+            misalign_penalty = (1.0 - c)
+            
+            self.rew_buf[:] = (
+                frac_volume
+                + self.control_error * self.control_penalty_scale
+                + action_penalty     * self.action_penalty_scale
+                + torque_penalty     * self.torque_coef
+                + work_penalty       * self.work_coef
+                + misalign_penalty   * self.misalign_coef                      
+            )
+            fall = self.object_pos[:, 2] < (self.object_init_pos[:, 2] - self.fall_dist)
+
+            self.rew_buf[:] = torch.where(fall,
+                                          self.rew_buf + self.fall_penalty,
+                                          self.rew_buf)
+            timed_out = self.progress_buf >= self.max_episode_length - 1
+            self.reset_buf[:] = torch.where(fall | timed_out,
+                                            torch.ones_like(self.reset_buf),
+                                            torch.zeros_like(self.reset_buf))
+
+            # we don’t track consecutive successes for this task yet
+            self.extras['consecutive_successes'] = torch.zeros_like(self.consecutive_successes).mean()
+            #print rewards
+            return
         else:
-            inverse_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(self.last_object_rot)).transpose(1, 2)
-            forward_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(self.object_rot))
-
-        vector_1_new = torch.bmm(inverse_rotation_matrix, vector_1.unsqueeze(-1))
-        vector_1_new = torch.bmm(forward_rotation_matrix, vector_1_new).squeeze()
-
-        rot_vec_coordinate_1 = (vector_1_new * vector_1).sum(-1).reshape(-1, 1)
-        rot_vec_coordinate_2 = (vector_1_new * vector_2).sum(-1).reshape(-1, 1)
-        rot_vec_coordinate_3 = (vector_1_new * self.spin_axis).sum(-1)
-
-        dev_angle = 3.1415926 / 2 - torch.arccos(rot_vec_coordinate_3)
-        dev_angle = torch.abs(dev_angle)
-
-        rot_vec = torch.cat((rot_vec_coordinate_1, rot_vec_coordinate_2), dim=-1)
-        rot_vec = torch.nn.functional.normalize(rot_vec, dim=-1)
-
-        inner_prod = rot_vec[:, 0]
-        theta_sign = torch.sign(rot_vec[:, 1])
-        theta = theta_sign * torch.arccos(inner_prod)
-
-        torque_penalty = (self.torques ** 2).sum(-1)
-        work_penalty = (torch.abs(self.torques) * torch.abs(self.dof_vel_finite_diff)).sum(-1)
-
-        if self.reward_mode == 'finger':
             if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
-                init_relative_rot = torch.zeros_like(relative_rot)
-                init_relative_rot[:, -1] = 1.
-                self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], \
-                self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward_finger(
-                    torch.tensor(self.spin_coef).to(self.device),
-                    torch.tensor(self.aux_coef).to(self.device),
-                    torch.tensor(self.main_coef).to(self.device),
-                    torch.tensor(self.vel_coef).to(self.device),
-                    torch.tensor(self.torque_coef).to(self.device),
-                    torch.tensor(self.work_coef).to(self.device),
-                    torch.tensor(self.contact_coef).to(self.device),
-                    torch.tensor(self.finger_coef).to(self.device),
-                    self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
-                    self.consecutive_successes,
-                    self.max_episode_length, self.fingertip_pos, self.object_pos, relative_rot, self.object_init_pos,
-                    init_relative_rot, self.object_linvel,
-                    self.object_angvel,
-                    self.goal_pos, self.goal_rot, self.finger_contacts, self.tip_contacts, self.contact_coef,
-                    self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.control_error,
-                    self.control_penalty_scale, self.actions, self.action_penalty_scale,
-                    self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty, self.spin_axis,
-                    theta * 20, dev_angle * 20, torque_penalty, work_penalty,
-                    self.max_consecutive_successes, self.av_factor, (self.object_type == "pen"), self.object_set_id
-                )
+                last_relative_pos = self.last_object_pos[:, 1] - self.last_object_pos[:, 0]
+                relative_pos = self.object_pos[:, 1] - self.object_pos[:, 0]
+                last_relative_pos = torch.nn.functional.normalize(last_relative_pos, dim=-1)
+                relative_pos = torch.nn.functional.normalize(relative_pos, dim=-1)
+                zero_pos = torch.zeros_like(relative_pos)
+                zero_pos[:, 1] = -1.
+
+                last_dot = torch.tensor([torch.dot(zero_pos[i], last_relative_pos[i]).item() for i in range(zero_pos.shape[0])]).unsqueeze(1).to(self.device)
+                last_cross = torch.cross(zero_pos, last_relative_pos)
+                last_relative_rot = torch.cat([last_cross, 1+last_dot], dim=-1)
+                last_relative_rot = torch.nn.functional.normalize(last_relative_rot, dim=-1)
+
+                dot = torch.tensor([torch.dot(zero_pos[i], relative_pos[i]).item() for i in range(zero_pos.shape[0])]).unsqueeze(1).to(self.device)
+                cross = torch.cross(zero_pos, relative_pos)
+                relative_rot = torch.cat([cross, 1+dot], dim=-1)
+                relative_rot = torch.nn.functional.normalize(relative_rot, dim=-1)
+            
+            # Generate a normal vector to the spinning axis.
+            tmp_vector = self.spin_axis + torch.randn_like(self.spin_axis)  
+            vector_1 = torch.cross(self.spin_axis, tmp_vector)
+            vector_1 = torch.nn.functional.normalize(vector_1, dim=-1)
+
+            # Generate another vector to form a basis [spin_axis, v1, v2]
+            vector_2 = torch.cross(self.spin_axis, vector_1)
+            vector_2 = torch.nn.functional.normalize(vector_2, dim=-1)
+            
+            if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
+                inverse_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(last_relative_rot)).transpose(1, 2)
+                forward_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(relative_rot))
             else:
-                self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], \
-                self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward_finger(
-                    torch.tensor(self.spin_coef).to(self.device),
-                    torch.tensor(self.aux_coef).to(self.device),
-                    torch.tensor(self.main_coef).to(self.device),
-                    torch.tensor(self.vel_coef).to(self.device),
-                    torch.tensor(self.torque_coef).to(self.device),
-                    torch.tensor(self.work_coef).to(self.device),
-                    torch.tensor(self.contact_coef).to(self.device),
-                    torch.tensor(self.finger_coef).to(self.device),
-                    self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
-                    self.consecutive_successes,
-                    self.max_episode_length, self.fingertip_pos, self.object_pos, self.object_rot, self.object_init_pos,
-                    self.object_init_quat, self.object_linvel,
-                    self.object_angvel,
-                    self.goal_pos, self.goal_rot, self.finger_contacts, self.tip_contacts, self.contact_coef,
-                    self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.control_error,
-                    self.control_penalty_scale, self.actions, self.action_penalty_scale,
-                    self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty, self.spin_axis,
-                    theta * 20, dev_angle * 20, torque_penalty, work_penalty,
-                    self.max_consecutive_successes, self.av_factor, (self.object_type == "pen"), self.object_set_id
-                )
+                inverse_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(self.last_object_rot)).transpose(1, 2)
+                forward_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(self.object_rot))
 
-        else:
-            raise NotImplementedError
+            vector_1_new = torch.bmm(inverse_rotation_matrix, vector_1.unsqueeze(-1))
+            vector_1_new = torch.bmm(forward_rotation_matrix, vector_1_new).squeeze()
 
-        self.extras['consecutive_successes'] = self.consecutive_successes.mean()
+            rot_vec_coordinate_1 = (vector_1_new * vector_1).sum(-1).reshape(-1, 1)
+            rot_vec_coordinate_2 = (vector_1_new * vector_2).sum(-1).reshape(-1, 1)
+            rot_vec_coordinate_3 = (vector_1_new * self.spin_axis).sum(-1)
 
-        if self.print_success_stat:
-            self.total_resets = self.total_resets + self.reset_buf.sum()
-            direct_average_successes = self.total_successes + self.successes.sum()
-            self.total_successes = self.total_successes + (self.successes * self.reset_buf).sum()
+            dev_angle = 3.1415926 / 2 - torch.arccos(rot_vec_coordinate_3)
+            dev_angle = torch.abs(dev_angle)
 
-            # The direct average shows the overall result more quickly, but slightly undershoots long term
-            # policy performance.
-            print("Direct average consecutive successes = {:.1f}".format(
-                direct_average_successes / (self.total_resets + self.num_envs)))
-            if self.total_resets > 0:
-                print("Post-Reset average consecutive successes = {:.1f}".format(
-                    self.total_successes / self.total_resets))
+            rot_vec = torch.cat((rot_vec_coordinate_1, rot_vec_coordinate_2), dim=-1)
+            rot_vec = torch.nn.functional.normalize(rot_vec, dim=-1)
+
+            inner_prod = rot_vec[:, 0]
+            theta_sign = torch.sign(rot_vec[:, 1])
+            theta = theta_sign * torch.arccos(inner_prod)
+
+            torque_penalty = (self.torques ** 2).sum(-1)
+            work_penalty = (torch.abs(self.torques) * torch.abs(self.dof_vel_finite_diff)).sum(-1)
+            # rot_fix_single = self.object_rot.new_tensor([0.0, 0.70710678, 0.0, 0.70710678])
+
+            # # Make it the same shape as self.object_rot
+            # rot_fix = rot_fix_single.unsqueeze(0).repeat(self.object_rot.shape[0], 1)
+            
+
+            if self.reward_mode == 'finger':
+                if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
+                    init_relative_rot = torch.zeros_like(relative_rot)
+                    init_relative_rot[:, -1] = 1.
+                    self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], \
+                    self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward_finger(
+                        torch.tensor(self.spin_coef).to(self.device),
+                        torch.tensor(self.aux_coef).to(self.device),
+                        torch.tensor(self.main_coef).to(self.device),
+                        torch.tensor(self.vel_coef).to(self.device),
+                        torch.tensor(self.torque_coef).to(self.device),
+                        torch.tensor(self.work_coef).to(self.device),
+                        torch.tensor(self.contact_coef).to(self.device),
+                        torch.tensor(self.finger_coef).to(self.device),
+                        self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
+                        self.consecutive_successes,
+                        self.max_episode_length, self.fingertip_pos, self.object_pos, relative_rot, self.object_init_pos,
+                        init_relative_rot, self.object_linvel,
+                        self.object_angvel,
+                        self.goal_pos, self.goal_rot, self.finger_contacts, self.tip_contacts, self.contact_coef,
+                        self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.control_error,
+                        self.control_penalty_scale, self.actions, self.action_penalty_scale,
+                        self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty, self.spin_axis,
+                        theta * 20, dev_angle * 20, torque_penalty, work_penalty,
+                        self.max_consecutive_successes, self.av_factor, (self.object_type == "pen"), self.object_set_id
+                    )
+                else:
+                    self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], \
+                    self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward_finger(
+                        torch.tensor(self.spin_coef).to(self.device),
+                        torch.tensor(self.aux_coef).to(self.device),
+                        torch.tensor(self.main_coef).to(self.device),
+                        torch.tensor(self.vel_coef).to(self.device),
+                        torch.tensor(self.torque_coef).to(self.device),
+                        torch.tensor(self.work_coef).to(self.device),
+                        torch.tensor(self.contact_coef).to(self.device),
+                        torch.tensor(self.finger_coef).to(self.device),
+                        self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
+                        self.consecutive_successes,
+                        self.max_episode_length, self.fingertip_pos, self.object_pos, self.object_rot, self.object_init_pos,
+                        self.object_init_quat, self.object_linvel,
+                        self.object_angvel,
+                        self.goal_pos, self.goal_rot, self.finger_contacts, self.tip_contacts, self.contact_coef,
+                        self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.control_error,
+                        self.control_penalty_scale, self.actions, self.action_penalty_scale,
+                        self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty, self.spin_axis,
+                        theta * 20, dev_angle * 20, torque_penalty, work_penalty,
+                        self.max_consecutive_successes, self.av_factor, (self.object_type == "pen"), self.object_set_id
+                    )
+
+            else:
+                raise NotImplementedError
+            # print("Reward: ", self.rew_buf.mean().item())
+            self.extras['consecutive_successes'] = self.consecutive_successes.mean()
+
+            if self.print_success_stat:
+                self.total_resets = self.total_resets + self.reset_buf.sum()
+                direct_average_successes = self.total_successes + self.successes.sum()
+                self.total_successes = self.total_successes + (self.successes * self.reset_buf).sum()
+
+                # The direct average shows the overall result more quickly, but slightly undershoots long term
+                # policy performance.
+                print("Direct average consecutive successes = {:.1f}".format(
+                    direct_average_successes / (self.total_resets + self.num_envs)))
+                if self.total_resets > 0:
+                    print("Post-Reset average consecutive successes = {:.1f}".format(
+                        self.total_successes / self.total_resets))
 
     def compute_observations(self):
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -1105,6 +1273,7 @@ class AllegroArmMOAR(VecTask):
                 self.student_obs_buf[:, :] = self.obs_buf.clone()
 
         elif mode == 'fs':
+            contacts = 48
             if self.asymmetric_obs:
                 self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
                                                                        self.arm_hand_dof_lower_limits,
@@ -1121,14 +1290,14 @@ class AllegroArmMOAR(VecTask):
                 self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
                 self.states_buf[:, obs_end + self.num_actions: obs_end + self.num_actions + 24] = self.spin_axis.repeat(1, 8)
 
-                all_contact = self.contact_tensor.reshape(-1, 49, 3).clone()
+                all_contact = self.contact_tensor.reshape(-1, contacts, 3).clone()
                 all_contact = torch.norm(all_contact, dim=-1).float()
                 all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact), all_contact / 20.0)
-                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + 49] = all_contact
-                self.states_buf[:, obs_end + self.num_actions + 24 + 49:
-                                   obs_end + self.num_actions + 24 + 49 + self.num_training_objects] = self.object_one_hot_vector  
+                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + contacts] = all_contact
+                self.states_buf[:, obs_end + self.num_actions + 24 + contacts:
+                                   obs_end + self.num_actions + 24 + contacts + self.num_training_objects] = self.object_one_hot_vector  
 
-                end_pos = obs_end + self.num_actions + 24 + 49 + self.num_training_objects
+                end_pos = obs_end + self.num_actions + 24 + contacts + self.num_training_objects
                 self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
 
             self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
@@ -1137,7 +1306,7 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 0:6] = 0.0
             self.last_obs_buf[:, 22:45] = 0
 
-            contacts = self.contact_tensor.reshape(-1, 49, 3).clone() 
+            contacts = self.contact_tensor.reshape(-1, contacts, 3).clone() 
             contacts = contacts[:, self.sensor_handle_indices, :] 
             tip_contacts = contacts[:, self.fingertip_indices, :]
 
@@ -1196,6 +1365,7 @@ class AllegroArmMOAR(VecTask):
             self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
         
         elif mode == 'fspc':
+            contacts = 48
             if self.asymmetric_obs:
                 self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
                                                                        self.arm_hand_dof_lower_limits,
@@ -1212,24 +1382,24 @@ class AllegroArmMOAR(VecTask):
                 self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
                 self.states_buf[:, obs_end + self.num_actions: obs_end + self.num_actions + 24] = self.spin_axis.repeat(1, 8)
 
-                all_contact = self.contact_tensor.reshape(-1, 49, 3).clone()
+                all_contact = self.contact_tensor.reshape(-1, contacts, 3).clone()
                 all_contact = torch.norm(all_contact, dim=-1).float()
                 all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact), all_contact / 20.0)
-                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + 49] = all_contact
+                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + contacts] = all_contact
                 if not self.pc_ablation:
                     if self.cfg["env"]["pc_category"] == "laptop_smallpn_fulldata" or self.cfg["env"]["pc_category"] == "bucket_mediumpn_fulldata":
-                        self.states_buf[:, obs_end + self.num_actions + 24 + 49:
-                                    obs_end + self.num_actions + 24 + 49 + 256] = self.object_class_pc_buf
+                        self.states_buf[:, obs_end + self.num_actions + 24 + contacts:
+                                    obs_end + self.num_actions + 24 + contacts + 256] = self.object_class_pc_buf
                     else:
-                        self.states_buf[:, obs_end + self.num_actions + 24 + 49:
-                                    obs_end + self.num_actions + 24 + 49 + 32] = self.object_class_pc_buf  
+                        self.states_buf[:, obs_end + self.num_actions + 24 + contacts:
+                                    obs_end + self.num_actions + 24 + contacts + 32] = self.object_class_pc_buf  
                 if self.pc_ablation:
-                    end_pos = obs_end + self.num_actions + 24 + 49  
+                    end_pos = obs_end + self.num_actions + 24 + contacts  
                 else:
                     if self.cfg["env"]["pc_category"] == "laptop_smallpn_fulldata" or self.cfg["env"]["pc_category"] == "bucket_mediumpn_fulldata":
-                        end_pos = obs_end + self.num_actions + 24 + 49 + 256
+                        end_pos = obs_end + self.num_actions + 24 + contacts + 256
                     else:
-                        end_pos = obs_end + self.num_actions + 24 + 49 + 32  
+                        end_pos = obs_end + self.num_actions + 24 + contacts + 32  
                 self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
 
             self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
@@ -1238,7 +1408,7 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 0:6] = 0.0
             self.last_obs_buf[:, 22:45] = 0
 
-            contacts = self.contact_tensor.reshape(-1, 49, 3).clone() 
+            contacts = self.contact_tensor.reshape(-1, contacts, 3).clone() 
             contacts = contacts[:, self.sensor_handle_indices, :]
             tip_contacts = contacts[:, self.fingertip_indices, :]
 
@@ -1768,16 +1938,37 @@ class AllegroArmMOAR(VecTask):
                 self.reset_position_noise * rand_floats[:, 0:2]
             self.root_state_tensor[self.object_indices[env_ids], self.up_axis_idx] = self.object_init_state[env_ids, ..., self.up_axis_idx] + \
                 self.reset_position_noise * rand_floats[:, self.up_axis_idx]
-
+            self.root_state_tensor[self.object_indices[env_ids], 2] += 0.02  # +2 cm
+        
         if not self.use_initial_rotation:
             # legacy codes.
-            new_object_rot = randomize_rotation(torch.zeros_like(rand_floats[:, 3]),
-                                                    torch.zeros_like(rand_floats[:, 4]), self.x_unit_tensor[env_ids],
-                                                    self.y_unit_tensor[env_ids])
+            if self.object_set_id == "ball":
+                new_object_rot = randomize_rotation(torch.zeros_like(rand_floats[:, 3]),
+                                                        torch.zeros_like(rand_floats[:, 4]), self.x_unit_tensor[env_ids],
+                                                        self.y_unit_tensor[env_ids])
+            else:
+                new_object_rot = self.object_init_state[env_ids, ..., 3:7].clone()
 
         else:
             new_object_rot = randomize_rotation(torch.zeros_like(rand_floats[:, 3]), rand_floats[:, 4],
                                                 self.y_unit_tensor[env_ids], self.z_unit_tensor[env_ids])
+
+
+        # N      = len(env_ids)
+        # device = self.device
+
+        # # random angles θ ∈ (–π, π]
+        # theta  = (torch.rand(N, device=device) - 0.5) * 2.0 * math.pi
+        # axis_z = self.z_unit_tensor[env_ids]                    # (N,3)  [0,0,1]
+
+        # # 1. wxyz quaternion from helper
+        # q_wxyz = quat_from_angle_axis(theta, axis_z)            # (N,4)  wxyz
+
+        # # 2. reorder to xyzw for root-state
+        # q_xyzw = torch.cat([q_wxyz[:, 1:], q_wxyz[:, :1]], dim=1)   # (N,4) xyzw
+
+        # new_object_rot = q_xyzw
+
 
         if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
             self.root_state_tensor[self.object_indices[env_ids], 3:7] = new_object_rot.clone().unsqueeze(1)
@@ -1789,7 +1980,6 @@ class AllegroArmMOAR(VecTask):
             object_indices = torch.unique(torch.cat([self.object_indices[env_ids]], dim=-1).to(torch.int32))
         else:
             object_indices = torch.unique(torch.cat([self.object_indices[env_ids]]).to(torch.int32))
-
         # reset spinning axis
         if not self.use_initial_rotation:
             self.reset_spin_axis(env_ids)
@@ -1831,6 +2021,7 @@ class AllegroArmMOAR(VecTask):
         for env_id in env_ids:
             self.object_init_pos[env_id] = self.root_state_tensor[self.object_indices[env_id], 0:3]
             self.object_init_quat[env_id] = self.root_state_tensor[self.object_indices[env_id], 3:7]
+
 
     def pre_physics_step(self, actions):
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -1898,6 +2089,15 @@ class AllegroArmMOAR(VecTask):
         self.randomize_buf += 1
 
         self.compute_observations()
+
+        if self.rotation_axis == "custom" and self.viewer:                       # or your existing ‘condition’
+            self.gym.clear_lines(self.viewer)
+
+            # … your current debug drawings …
+
+            # draw the plane in each env
+            for env_id, env_ptr in enumerate(self.envs):
+                self._draw_plane(env_id, env_ptr)
 
         # Now we disable this...
         if self.rotation_axis == 'all':
@@ -2060,7 +2260,7 @@ def compute_hand_reward_finger(
         reward = torch.where(goal_dist >= fall_dist, reward + fall_penalty, reward)
         resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
 
-    if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr":
+    if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr" or object_set_id == "custom":
         pass
     elif object_set_id == "cross" or object_set_id in ["cross3", "cross5", "cross_t", "cross_y"]:
         resets = torch.where(angle_difference > 0.2 * 3.1415926, torch.ones_like(reset_buf), resets)
@@ -2079,7 +2279,6 @@ def compute_hand_reward_finger(
 
     timed_out = progress_buf >= max_episode_length - 1
     resets = torch.where(timed_out, torch.ones_like(resets), resets)
-
     num_resets = torch.sum(resets)
     finished_cons_successes = torch.sum(successes * resets.float())
 

@@ -65,7 +65,8 @@ class DistillWarmUpTrainer:
             worker_id=0,
             warmup_mode=None,
             player=None,
-            ablation_mode=None
+            ablation_mode=None,
+            student_resume="None",
     ):
         self.ablation_mode = ablation_mode 
 
@@ -78,6 +79,8 @@ class DistillWarmUpTrainer:
         self.observation_space = vec_env.env.observation_space
         self.action_space = vec_env.env.action_space
         self.state_space = vec_env.env.state_space
+        print("Observation space:", self.observation_space)
+        print("Action space:", self.action_space)
 
         self.device = device
         self.desired_kl = desired_kl
@@ -151,6 +154,10 @@ class DistillWarmUpTrainer:
             self.teacher_obs_shape = self.obs_shape['obs']
         else:
             self.teacher_obs_shape = self.obs_shape
+
+        # print("Teacher observation shape:", self.teacher_obs_shape)
+        # print("Observation space:", self.observation_space) 
+        # exit()
         self.teacher_build_config = {
             'actions_num': self.actions_num,
             'input_shape': self.teacher_obs_shape,
@@ -213,6 +220,11 @@ class DistillWarmUpTrainer:
         self.student_actor_critic = self.student_network.build(self.student_build_config)
         self.student_actor_critic.to(self.device)
 
+        if student_resume is not None and student_resume != "None":
+            student_path = "{}/{}.pth".format(student_log_dir, student_resume)
+            print("Loading student model from", student_path)
+            self.student_load(student_path)
+
         self.optimizer = optim.Adam(
             self.student_actor_critic.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
@@ -233,7 +245,7 @@ class DistillWarmUpTrainer:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.is_testing = is_testing
-        self.current_learning_iteration = 0
+        self.current_learning_iteration = 17450
 
         self.apply_reset = apply_reset
         self.teacher_resume = teacher_resume
@@ -242,7 +254,7 @@ class DistillWarmUpTrainer:
         self.teacher_data_dir = teacher_data_dir
 
     def mini_batch_generator(self, num_mini_batches):
-        batch_size = 200 * 256 * self.mini_data_size  # self.vec_env.env.num_envs * self.num_transitions_per_env
+        batch_size = 200 * 64 * self.mini_data_size  # self.vec_env.env.num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
         # For physics-based RL, each environment is already randomized. There is no value to doing random sampling
         # but a lot of CPU overhead during the PPO process. So, we can just switch to a sequential sampler instead
@@ -272,6 +284,7 @@ class DistillWarmUpTrainer:
         self.teacher_actor_critic.eval()
 
     def student_load(self, path):
+        print("Loading student model from", path)
         checkpoint = torch_ext.load_checkpoint(path)
         self.student_actor_critic.load_state_dict(checkpoint['model'])
         self.set_stats_weights(self.student_actor_critic, checkpoint)
@@ -438,11 +451,13 @@ class DistillWarmUpTrainer:
             teacher_obs_tmp, teacher_actions_tmp, teacher_sigmas_tmp, teacher_pointcloud_tmp = torch.load(load_dir) 
             teacher_obs_storage.extend(teacher_obs_tmp.cpu())
             teacher_actions_storage.extend(teacher_actions_tmp.cpu())
+            # teacher_expert_obs_storage.extend(teacher_expert_obs_tmp.cpu())
             teacher_sigmas_storage.extend(teacher_sigmas_tmp.cpu())
             teacher_pointcloud_storage.extend(teacher_pointcloud_tmp.cpu())
 
         teacher_obs_storage = torch.stack(teacher_obs_storage, dim=0)
         teacher_actions_storage = torch.stack(teacher_actions_storage, dim=0)
+        # teacher_expert_obs_storage = torch.stack(teacher_expert_obs_storage, dim=0)
         teacher_sigmas_storage = torch.stack(teacher_sigmas_storage, dim=0)
         teacher_pointcloud_storage = torch.stack(teacher_pointcloud_storage, dim=0)
         
@@ -468,6 +483,7 @@ class DistillWarmUpTrainer:
             for batch_idx, indices in enumerate(batch):
                 teacher_obs_batch = teacher_obs_storage[indices].to(self.device)
                 teacher_actions_batch = teacher_actions_storage[indices].to(self.device)
+                # teacher_expert_obs_batch = teacher_expert_obs_storage[indices].to(self.device)
                 teacher_sigmas_batch = teacher_sigmas_storage[indices].to(self.device)
                 if self.ablation_mode != "no-pc": 
                     teacher_pointcloud_batch = teacher_pointcloud_storage[indices].to(self.device)
@@ -480,11 +496,36 @@ class DistillWarmUpTrainer:
                             teacher_pointcloud_batch[i][zeros2[0]] = teacher_pointcloud_batch[i, 0, :].clone()
                 else:
                     student_obs_batch = teacher_obs_batch
+                # with torch.no_grad():
+                #     tmp_obs = {
+                #         'obs': teacher_expert_obs_batch,}
+                #     teacher_res_dict = self.get_action_values(self.teacher_actor_critic, tmp_obs, mode='teacher')
+                #     teacher_actions = res_dict['actions']
+                
+                #print mean difference between teacher actions and teachers expert actions batch
+                # print("Teacher actions mean difference:", torch.abs(teacher_actions - teacher_actions_batch).mean().item())
+                
                 res_dict = self.calc_gradients(self.student_actor_critic, student_obs_batch, teacher_actions_batch)
 
                 mu_batch = res_dict['mus']
                 sigma_batch = res_dict['sigmas']
-                
+
+
+                # print("std of teacher actions:", torch.clamp(teacher_actions_batch, -1.0, 1.0).std())
+                # print("average of teacher actions:", torch.clamp(teacher_actions_batch, -1.0, 1.0).mean())
+
+                # print("std of student actions:", mu_batch.std())
+                # print("average of student actions:", mu_batch.mean())
+
+                # close_mask   = teacher_actions_batch.abs() >= 0.99            # bool tensor
+                # num_close    = close_mask.sum().item()          # total saturated scalars
+                # total_vals   = teacher_actions_batch.numel()
+                # pct_close    = 100.0 * num_close / total_vals   # percentage
+
+                # print(f"{num_close:,}/{total_vals:,} "
+                #     f"values are within ±0.05 of the rail  "
+                #     f"({pct_close:.1f} %).")
+
                 # Imitation loss
                 bc_loss = torch.sum(self.recon_criterion(mu_batch, torch.clamp(teacher_actions_batch, -1.0, 1.0)), dim=-1).mean() 
                 loss = self.bc_loss_coef * bc_loss
@@ -501,3 +542,257 @@ class DistillWarmUpTrainer:
 
         return mean_bc_loss
     
+    @torch.no_grad()
+    def evaluate_student(self,
+                        n_spots: int = 500,
+                        render: bool = False):
+
+        assert self.vec_env is not None, "vec_env is required for evaluation"
+        self.student_actor_critic.eval()
+
+        n_envs          = self.vec_env.env.num_envs
+        obs_env         = self.vec_env.reset()
+        running_return  = np.zeros(n_envs, dtype=np.float32)
+        finished_mask   = np.zeros(n_envs, dtype=bool)      # NEW
+        ep_returns: list[float] = []
+
+        while not finished_mask.all():                      # loop until every env done once
+            # ---------- build observations exactly as during training ----------
+            if self.ablation_mode != "no-pc":
+                student_obs = {
+                    'obs': torch.as_tensor(obs_env['obs']['student_obs'], device=self.device),
+                    'pointcloud': torch.as_tensor(obs_env['obs']['pointcloud'], device=self.device)
+                }
+            else:
+                student_obs = torch.as_tensor(obs_env['obs']['student_obs'], device=self.device)
+
+            student_obs = self._preproc_obs(student_obs)
+
+            inp = {
+                'is_train'   : False,
+                'prev_actions': None,
+                'obs'        : student_obs,
+                'rnn_states' : self.rnn_states
+            }
+
+            actions = self.student_actor_critic(inp)['actions']
+            actions = torch.clamp(actions, -1.0, 1.0)
+
+            # Send dummy zero actions to envs that have already finished
+            if finished_mask.any():
+                actions[finished_mask] = 0.0
+
+            # ------------------- environment step -----------------------------
+            obs_env, rew, done, _ = self.vec_env.step(actions)
+
+            rew_np  = rew.cpu().numpy()  if torch.is_tensor(rew)  else rew
+            done_np = done.cpu().numpy() if torch.is_tensor(done) else done
+            running_return += rew_np.squeeze()
+
+            # record first (and only) completion per env
+            for idx in range(n_envs):
+                if done_np[idx] and not finished_mask[idx]:
+                    ep_returns.append(float(running_return[idx]))
+                    finished_mask[idx] = True                # mark as finished
+                    running_return[idx] = 0.0                # stop accumulating
+
+            if render and hasattr(self.vec_env, 'render'):
+                self.vec_env.render(mode='human')
+
+        # ------------------------- statistics ---------------------------------
+        mean_ret = np.mean(ep_returns)
+        std_ret  = np.std(ep_returns)
+        max_ret  = np.max(ep_returns)
+        min_ret  = np.min(ep_returns)
+
+        print(f"Student policy over {len(ep_returns)} episodes:")
+        print(f"  mean = {mean_ret:.2f}")
+        print(f"  std  = {std_ret:.2f}")
+        print(f"  min  = {min_ret:.2f}")
+        print(f"  max  = {max_ret:.2f}")
+
+        return ep_returns  # unchanged signature
+
+
+    @torch.no_grad()
+    def collect_dagger_rollouts(self,
+                                horizon: int = 5000,
+                                save_every: int = 200):
+        """
+        DAgger collection that matches DistillCollector.run storage format:
+            tuple(obs, teacher_mus, teacher_sigmas, pointcloud)
+        Each .pt file holds (num_envs * 200, 4, …) rows.
+        The *student* policy drives the env; the *teacher* labels each state.
+        """
+        # ───────────────────── setup ───────────────────────────────────────────
+
+        current_obs = self.vec_env.reset()
+        current_states = self.vec_env.env.get_state()
+
+        self.teacher_load(
+            "{}/{}.pth".format(self.teacher_log_dir, self.teacher_resume))
+        cur_reward_sum = torch.zeros(
+            self.vec_env.env.num_envs, dtype=torch.float, device=self.device)
+        cur_episode_length = torch.zeros(
+            self.vec_env.env.num_envs, dtype=torch.float, device=self.device)
+
+        reward_sum = []
+        episode_length = []
+
+        for it in range(0, 200):
+            # report_gpu()
+            ep_infos = []
+
+            storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': []}  # , 'pointcloud': []}
+
+            # Rollout
+            for i in range(200):
+                if i % 100 == 99:
+                    print(i)
+                if self.apply_reset:
+                    current_obs = self.vec_env.reset()
+                    current_states = self.vec_env.get_state()
+                
+                teacher_obs = current_obs.copy()
+                teacher_obs["obs"] = current_obs["obs"]["obs"]
+                with torch.no_grad():
+                    if self.ablation_mode != "no-pc":
+                        student_obs = {
+                            'obs'       : torch.as_tensor(current_obs['obs']['student_obs'],
+                                                        device=self.device),
+                            'pointcloud': torch.as_tensor(current_obs['obs']['pointcloud'],
+                                                        device=self.device)
+                        }
+                    else:
+                        student_obs = torch.as_tensor(current_obs['obs']['student_obs'],
+                                                    device=self.device)
+                    student_obs = self._preproc_obs(student_obs)
+
+
+                    inp = {'is_train'   : False,
+                        'prev_actions': None,
+                        'obs'         : student_obs,
+                        'rnn_states'  : self.rnn_states}
+                    student_actions = torch.clamp(
+                                        self.student_actor_critic(inp)['actions'],
+                                        -1.0, 1.0) 
+                
+                # Compute the action
+                with torch.no_grad():
+                    res_dict = self.get_action_values(self.teacher_actor_critic, teacher_obs, mode='teacher')
+                    teacher_actions = res_dict['actions']
+                    teacher_mus = res_dict['mus']
+                    teacher_sigmas = res_dict['sigmas']
+
+                    storage['obs'].extend(current_obs['obs']['student_obs'])
+                    storage['actions'].extend(teacher_mus)
+                    storage['sigmas'].extend(teacher_sigmas)
+                    storage['pointcloud'].extend(current_obs['obs']['pointcloud'])
+
+                    next_obs, rews, dones, infos = self.vec_env.step(torch.clamp(student_actions, - 1.0, 1.0))
+                    next_states = self.vec_env.env.get_state()
+                # Record the transition
+                current_obs = next_obs
+                current_states.copy_(next_states)
+                ep_infos.append(infos)
+
+                if self.print_log:
+                    cur_reward_sum[:] += rews
+                    cur_episode_length[:] += 1
+
+                    new_ids = (dones > 0).nonzero(as_tuple=False)
+                    reward_sum.extend(
+                        cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
+                    episode_length.extend(
+                        cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
+                    cur_reward_sum[new_ids] = 0
+                    cur_episode_length[new_ids] = 0
+                    if i % 100 == 99:
+                        print(np.mean(reward_sum), np.mean(episode_length))
+                if i % 200 == 199:
+                    for key in storage.keys():
+                        storage[key] = torch.stack(storage[key], dim=0)
+                        print(storage[key].shape)
+                    save_dir = os.path.join(self.teacher_data_dir, "dagger_{}_{}_{}.pt".format(1, it, int((i-199)/200)))
+                    torch.save((storage['obs'], storage['actions'], storage['sigmas'], storage['pointcloud']), save_dir)  
+                    storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': []} 
+                    reward_sum = []
+                    episode_length = []
+
+
+        # print("Loading teacher model from",
+        #     f"{self.teacher_log_dir}/{self.teacher_resume}.pth")
+        # self.teacher_load(f"{self.teacher_log_dir}/{self.teacher_resume}.pth")
+
+        # if horizon is None:
+        #     horizon = self.num_transitions_per_env          # default = 200 in run()
+
+        # save_dir = os.path.join(self.teacher_data_dir)
+        # os.makedirs(save_dir, exist_ok=True)
+
+        # storage = {'obs': [],'actions': [], 'sigmas': [], 'pointcloud': []}
+        # batch_idx      = 0
+        # steps_in_batch = 0
+
+        # self.student_actor_critic.eval()
+        # obs_env = self.vec_env.reset()
+
+        # for step in range(horizon):
+        #     teacher_obs        = obs_env.copy()
+        #     teacher_obs['obs'] = obs_env['obs']['obs']           # identical to run()
+        #     res_teacher        = self.get_action_values(
+        #                             self.teacher_actor_critic,
+        #                             teacher_obs, mode='teacher')
+
+        #     teacher_mus    = res_teacher['mus']       
+        #     teacher_sigmas = res_teacher['sigmas']    
+        #     teacher_actions = res_teacher['actions']  
+
+        #     if self.ablation_mode != "no-pc":
+        #         student_obs = {
+        #             'obs'       : torch.as_tensor(obs_env['obs']['student_obs'],
+        #                                         device=self.device),
+        #             'pointcloud': torch.as_tensor(obs_env['obs']['pointcloud'],
+        #                                         device=self.device)
+        #         }
+        #     else:
+        #         student_obs = torch.as_tensor(obs_env['obs']['student_obs'],
+        #                                     device=self.device)
+        #     student_obs = self._preproc_obs(student_obs)
+
+           
+
+        #     inp = {'is_train'   : False,
+        #         'prev_actions': None,
+        #         'obs'         : student_obs,
+        #         'rnn_states'  : self.rnn_states}
+        #     student_actions = torch.clamp(
+        #                         self.student_actor_critic(inp)['actions'],
+        #                         -1.0, 1.0)
+
+        #     storage['obs'       ].extend(obs_env['obs']['student_obs'])
+        #     # storage['expert_obs'].extend(obs_env['obs']['obs'])
+        #     storage['actions'   ].extend(teacher_actions.cpu())
+        #     storage['sigmas'    ].extend(teacher_sigmas.cpu())
+        #     storage['pointcloud'].extend(obs_env['obs']['pointcloud'])
+
+        #     obs_env, _, _, _ = self.vec_env.step(torch.clamp(teacher_actions, -1.0, 1.0))
+
+        #     steps_in_batch += 1
+        #     if steps_in_batch == save_every:
+        #         for k in storage:
+        #             storage[k] = torch.stack(storage[k], dim=0)  # keep (N_envs*200,4,…)
+        #             print(f"{k:>10} batch shape → {tuple(storage[k].shape)}")
+
+        #         file_name = f"dagger_batch_{3}_{batch_idx}.pt"
+        #         torch.save((storage['obs'],
+        #                     storage['actions'],
+        #                     # storage['expert_obs'],
+        #                     storage['sigmas'],
+        #                     storage['pointcloud']),
+        #                 os.path.join(save_dir, file_name))
+        #         print(f"  › saved {file_name}")
+
+        #         storage        = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': []}
+        #         steps_in_batch = 0
+        #         batch_idx     += 1

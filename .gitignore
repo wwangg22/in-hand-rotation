@@ -1,3 +1,15 @@
 *.egg-info
 __pycache__
 *.pyc
+
+dagger_data
+demonstration-baoding
+demonstration-baoding-2
+wandb
+runs
+
+test1
+
+videos
+
+*.pkl

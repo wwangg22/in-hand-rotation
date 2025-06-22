@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<robot name="cylinder" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- one link = one cylinder -->
+  <link name="cylinder">
+
+    <!-- ---------- inertial ---------- -->
+    <!-- rotate the inertia frame too, so the numbers below stay valid -->
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 1.5707963 0"/>   <!-- +90° about Y -->
+      <mass value="0.50"/>
+      <!-- same moments as before (they are expressed in the rotated frame) -->
+      <inertia
+        ixx="2.3858e-4"  ixy="0"    ixz="0"
+        iyy="2.3858e-4"  iyz="0"
+        izz="6.05e-5" />
+    </inertial>
+
+    <!-- ---------- visual ---------- -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 1.5707963 0"/>   <!-- match inertial -->
+      <geometry>
+        <cylinder radius="0.022" length="0.30"/>
+      </geometry>
+      <material name="Grey">
+        <color rgba="0.65 0.65 0.65 1"/>
+      </material>
+    </visual>
+
+    <!-- ---------- collision ---------- -->
+    <collision>
+      <origin xyz="0 0 0" rpy="0 1.5707963 0"/>   <!-- match visual -->
+      <geometry>
+        <cylinder radius="0.022" length="0.30"/>
+      </geometry>
+    </collision>
+
+  </link>
+
+</robot>

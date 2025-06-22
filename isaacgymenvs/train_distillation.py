@@ -71,6 +71,7 @@ def launch_rlg_hydra(cfg: DictConfig):
     # ensure checkpoints can be specified as relative paths
     if cfg.checkpoint:
         cfg.checkpoint = to_absolute_path(cfg.checkpoint)
+        print("[INFO] Using checkpoint:", cfg.checkpoint)
 
     cfg_dict = omegaconf_to_dict(cfg)
     print_dict(cfg_dict)

@@ -1,4 +1,4 @@
-# train.py
+# train_distillation.py
 # Script to train policies in Isaac Gym
 #
 # Copyright (c) 2018-2022, NVIDIA Corporation
@@ -31,8 +31,7 @@
 
 import datetime
 import isaacgym
-
-from isaacgym import gymapi, gymtorch
+from isaacgym import gymapi
 
 import os
 import hydra
@@ -48,10 +47,13 @@ from utils.reformat import omegaconf_to_dict, print_dict
 
 from utils.utils import set_np_formatting, set_seed
 import random
+
+from distillation.utils.config import get_args, parse_sim_params, load_cfg
+import torch
 ## OmegaConf & Hydra Config
 
 # Resolvers used in hydra configs (see https://omegaconf.readthedocs.io/en/2.1_branch/usage.html#resolvers)
-@hydra.main(config_name="config", config_path="./cfg")
+@hydra.main(config_name="config_distill", config_path="./cfg")
 def launch_rlg_hydra(cfg: DictConfig):
     from isaacgymenvs.utils.rlgames_utils import RLGPUEnv, RLGPUAlgoObserver, get_rlgames_env_creator
     from rl_games.common import env_configurations, vecenv
@@ -62,6 +64,7 @@ def launch_rlg_hydra(cfg: DictConfig):
     from isaacgymenvs.learning import amp_models
     from isaacgymenvs.learning import amp_network_builder
     import isaacgymenvs
+    from distillation.utils.process_distill import process_distill_trainer
 
     time_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_name = f"{cfg.wandb_name}_{time_str}"
@@ -69,6 +72,7 @@ def launch_rlg_hydra(cfg: DictConfig):
     # ensure checkpoints can be specified as relative paths
     if cfg.checkpoint:
         cfg.checkpoint = to_absolute_path(cfg.checkpoint)
+        print("[INFO] Using checkpoint:", cfg.checkpoint)
 
     cfg_dict = omegaconf_to_dict(cfg)
     print_dict(cfg_dict)
@@ -113,10 +117,10 @@ def launch_rlg_hydra(cfg: DictConfig):
             cfg,
             **kwargs,
         )
+        # if not cfg.headless:
+        #     eye, target = gymapi.Vec3(1.2, 1.2, 1.0), gymapi.Vec3(0, 0, 0)
+        #     envs.gym.viewer_camera_look_at(envs.viewer, envs.envs[0], eye, target)
 
-        if not cfg.headless:
-            eye, target = gymapi.Vec3(1.2, 1.2, 1.0), gymapi.Vec3(0, 0, 0)
-            envs.gym.viewer_camera_look_at(envs.viewer, envs.envs[0], eye, target)
 
 
         if cfg.capture_video:
@@ -162,12 +166,25 @@ def launch_rlg_hydra(cfg: DictConfig):
     print(rlg_config_dict)
     if need_set_prefix:
         rlg_config_dict['params']['config']['prefix'] = prefix
-    # convert CLI arguments into dictionory
-    # create runner and set the settings
-    runner = build_runner(RLGPUAlgoObserver())
-    runner.load(rlg_config_dict)
-    runner.reset()
 
+    teacher_params = cfg.train.params.copy()
+    student_params = cfg.train.params.copy()
+    cfg_distill = cfg.distill
+    # create env.
+    train_config = cfg.train.params.config.copy()
+    env_config = train_config.get('env_config', {})
+    num_actors = train_config['num_actors']
+    env_name = train_config['env_name']
+
+    vec_env = vecenv.create_vec_env(env_name, num_actors, **env_config)
+    env_info = vec_env.get_env_info()
+    print(vec_env.env)
+    
+
+    distiller = process_distill_trainer(vec_env, cfg_distill, cfg_distill.teacher_logdir, cfg_distill.student_logdir, teacher_params, student_params, cfg.wandb_activate, cfg_distill.bc_warmup,
+                                        teacher_data_dir=cfg_distill.teacher_data_dir, worker_id=cfg_distill.worker_id, bc_training=cfg_distill.bc_training, warmup_mode=cfg_distill.warmup_mode, batch_size=cfg_distill.learn.batch_size,
+                                        ablation_mode=cfg_distill.ablation_mode)
+    distill_iterations = cfg_distill["learn"]["max_iterations"]
     # dump config dict
 
     experiment_dir = os.path.join('runs', cfg.train.params.config.name)
@@ -177,15 +194,17 @@ def launch_rlg_hydra(cfg: DictConfig):
     with open(os.path.join(experiment_dir, 'config.yaml'), 'w') as f:
         f.write(OmegaConf.to_yaml(cfg))
 
-    runner.run({
-        'train': not cfg.test,
-        'play': cfg.test,
-        'checkpoint' : cfg.checkpoint,
-        'sigma' : None
-    })
+    # distiller.run(
+    #     num_learning_iterations=distill_iterations,
+    #     log_interval=cfg_distill["learn"]["save_interval"]
+    # )
+
+    print("ABOUT TO EVAL STUDENT!!")
+    rollouts = distiller.collect_dagger_rollouts()
 
     if cfg.wandb_activate and rank == 0:
         wandb.finish()
 
 if __name__ == "__main__":
+    torch.autograd.set_detect_anomaly(True)
     launch_rlg_hydra()
