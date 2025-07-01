@@ -12,7 +12,7 @@ task.env.legacy_obs=False distill.bc_training=warmup \
 task.env.objSet=ball task.env.is_distillation=True \
 train.params.config.user_prefix=bc-baoding-collect task=AllegroArmMOAR \
 task.env.numEnvs=64 train.params.config.minibatch_size=1024 \
-experiment=bc-baoding-collect wandb_activate=False \
+experiment=bc-baoding-collect wandb_activate=True \
 task.env.observationType=full_stack_baoding \
 train.params.config.central_value_config.minibatch_size=1024 \
 distill.worker_id=0 distill.ablation_mode=multi-modality-plus \

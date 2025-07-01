@@ -41,7 +41,7 @@ env:
   handInit: "default"
   numEnvs: ${resolve_default:16,${...num_envs}} 
   envSpacing: 0.75
-  episodeLength: 200
+  episodeLength: 500 #200
   enableDebugVis: False
   aggregateMode: 1
   sensorThresh: 1.0

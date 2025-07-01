@@ -406,7 +406,7 @@ class DistillWarmUpTrainer:
         self.num_teacher_transitions = 102400000
         self.num_batch = 125 
         self.dagger_it = -1
-        dagger_update_interval = 10
+        dagger_update_interval = 2000
 
         for it in range(self.current_learning_iteration, num_learning_iterations):
             # Learning step
@@ -424,7 +424,7 @@ class DistillWarmUpTrainer:
             if it % dagger_update_interval == 0 and it != 0:
                 print("DAGGER UPDATE")
                 self.dagger_it += 1
-                self.collect_dagger_rollouts(horizon=1, dagger_it=self.dagger_it)
+                self.collect_dagger_rollouts(horizon=10, dagger_it=self.dagger_it)
 
         self.save(os.path.join(self.student_log_dir,
                                    'model_bc_{}'.format(num_learning_iterations)))
@@ -690,10 +690,13 @@ class DistillWarmUpTrainer:
         n_envs          = self.vec_env.env.num_envs
         obs_env         = self.vec_env.reset()
         running_return  = np.zeros(n_envs, dtype=np.float32)
-        finished_mask   = np.zeros(n_envs, dtype=bool)      # NEW
-        ep_returns: list[float] = []
+        step_counter    = np.zeros(n_envs, dtype=np.int32)      # NEW – per-env step counts
+        finished_mask   = np.zeros(n_envs, dtype=bool)          # already ensures one-shot logging
 
-        while not finished_mask.all():                      # loop until every env done once
+        ep_returns: list[float] = []
+        ep_lengths: list[int]   = []
+
+        while not finished_mask.all():                          # stop when every env finished once
             # ---------- build observations exactly as during training ----------
             if self.ablation_mode != "no-pc":
                 student_obs = {
@@ -724,14 +727,19 @@ class DistillWarmUpTrainer:
 
             rew_np  = rew.cpu().numpy()  if torch.is_tensor(rew)  else rew
             done_np = done.cpu().numpy() if torch.is_tensor(done) else done
+
+            # count this step for unfinished envs
+            step_counter[~finished_mask] += 1
             running_return += rew_np.squeeze()
 
-            # record first (and only) completion per env
+            # on first completion per env, record return & length
             for idx in range(n_envs):
                 if done_np[idx] and not finished_mask[idx]:
                     ep_returns.append(float(running_return[idx]))
-                    finished_mask[idx] = True                # mark as finished
-                    running_return[idx] = 0.0                # stop accumulating
+                    ep_lengths.append(int(step_counter[idx]))
+                    finished_mask[idx]  = True
+                    running_return[idx] = 0.0          # stop accumulating
+                    step_counter[idx]   = 0            # (optional) stop counting
 
             if render and hasattr(self.vec_env, 'render'):
                 self.vec_env.render(mode='human')
@@ -742,14 +750,95 @@ class DistillWarmUpTrainer:
         max_ret  = np.max(ep_returns)
         min_ret  = np.min(ep_returns)
 
+        mean_len = np.mean(ep_lengths)
+        std_len  = np.std(ep_lengths)
+        max_len  = np.max(ep_lengths)
+        min_len  = np.min(ep_lengths)
+
         print(f"Student policy over {len(ep_returns)} episodes:")
-        print(f"  mean = {mean_ret:.2f}")
-        print(f"  std  = {std_ret:.2f}")
-        print(f"  min  = {min_ret:.2f}")
-        print(f"  max  = {max_ret:.2f}")
+        print(f"  return | mean: {mean_ret:.2f}  std: {std_ret:.2f}  min: {min_ret:.2f}  max: {max_ret:.2f}")
+        print(f"   steps | mean: {mean_len:.1f}  std: {std_len:.1f}  min: {min_len}      max: {max_len}")
 
-        return ep_returns  # unchanged signature
+        # keep original signature (first element) but also give lengths if caller wants them
+        return ep_returns, ep_lengths
 
+
+    @torch.no_grad()
+    def evaluate_teacher(self,
+                        render=  False):
+        """
+        Run one evaluation pass with the **expert / teacher** policy.
+
+        Stops after every parallel env finishes a single episode.
+
+        Returns
+        -------
+        (ep_returns, ep_lengths)
+            Lists of per-episode returns and lengths, in env-index order.
+        """
+        assert self.vec_env is not None, "`vec_env` must be initialised"
+
+        # ─── make sure weights are loaded & switch to eval ────────────────────────
+        self.teacher_load(f"{self.teacher_log_dir}/{self.teacher_resume}.pth")
+        self.teacher_actor_critic.eval()
+
+        n_envs          = self.vec_env.env.num_envs
+        obs_env         = self.vec_env.reset()
+
+        running_return  = np.zeros(n_envs, dtype=np.float32)
+        step_counter    = np.zeros(n_envs, dtype=np.int32)
+        finished_mask   = np.zeros(n_envs, dtype=bool)
+
+        ep_returns: list[float] = []
+        ep_lengths: list[int]   = []
+
+        while not finished_mask.all():
+            # ───── build teacher input exactly as in training ────────────────────
+            teacher_obs          = obs_env.copy()
+            teacher_obs["obs"]   = obs_env["obs"]["obs"]       # unwrap dict-of-dict
+            res                  = self.get_action_values(self.teacher_actor_critic,
+                                                        teacher_obs,
+                                                        mode="teacher")
+            actions              = torch.clamp(res["actions"], -1.0, 1.0)
+
+            # freeze finished envs
+            if finished_mask.any():
+                actions[finished_mask] = 0.0
+
+            # ───── environment step ──────────────────────────────────────────────
+            obs_env, rew, done, _ = self.vec_env.step(actions)
+
+            rew_np   = rew.cpu().numpy()   if torch.is_tensor(rew)   else rew
+            done_np  = done.cpu().numpy()  if torch.is_tensor(done)  else done
+
+            step_counter[~finished_mask] += 1
+            running_return               += rew_np.squeeze()
+
+            # first completion per env → log stats
+            for idx in range(n_envs):
+                if done_np[idx] and not finished_mask[idx]:
+                    ep_returns.append(float(running_return[idx]))
+                    ep_lengths.append(int(step_counter[idx]))
+                    finished_mask[idx]  = True
+                    running_return[idx] = 0.0
+                    step_counter[idx]   = 0
+
+            if render and hasattr(self.vec_env, "render"):
+                self.vec_env.render(mode="human")
+
+        # ────────── summary ───────────────────────────────────────────────────────
+        mean_ret, std_ret = np.mean(ep_returns), np.std(ep_returns)
+        max_ret,  min_ret = np.max(ep_returns), np.min(ep_returns)
+        mean_len, std_len = np.mean(ep_lengths), np.std(ep_lengths)
+        max_len,  min_len = np.max(ep_lengths), np.min(ep_lengths)
+
+        print(f"Teacher policy over {len(ep_returns)} episodes:")
+        print(f"  return | mean: {mean_ret:.2f}  std: {std_ret:.2f}  "
+            f"min: {min_ret:.2f}  max: {max_ret:.2f}")
+        print(f"   steps | mean: {mean_len:.1f}  std: {std_len:.1f}  "
+            f"min: {min_len}      max: {max_len}")
+
+        return ep_returns, ep_lengths
 
     @torch.no_grad()
     def collect_dagger_rollouts(self,

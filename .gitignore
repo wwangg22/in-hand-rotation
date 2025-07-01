@@ -13,3 +13,8 @@ test1
 videos
 
 *.pkl
+
+*.png
+*.jpg
+*.webm
+*.mp4
