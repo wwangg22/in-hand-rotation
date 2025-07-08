@@ -355,10 +355,7 @@ class DistillWarmUpTrainer:
                     'is_train': False,
                     'states': states,
                 }
-                if mode == 'teacher':
-                    value = self.get_teacher_central_value(input_dict)
-                else:
-                    raise NotImplementedError
+                value = self.get_teacher_central_value(input_dict)
                 res_dict['values'] = value
 
         return res_dict
@@ -557,6 +554,7 @@ class DistillWarmUpTrainer:
 
                 # Imitation loss
                 bc_loss = torch.sum(self.recon_criterion(mu_batch, torch.clamp(teacher_actions_batch, -1.0, 1.0)), dim=-1).mean() 
+                # bc_loss = torch.sum(self.recon_criterion(mu_batch, teacher_actions_batch), dim=-1).mean() 
                 loss = self.bc_loss_coef * bc_loss
                 # Gradient step
                 self.optimizer.zero_grad()
@@ -682,9 +680,21 @@ class DistillWarmUpTrainer:
     @torch.no_grad()
     def evaluate_student(self,
                         n_spots: int = 500,
-                        render: bool = False):
+                        render: bool = False,
+                        seed = None):
 
         assert self.vec_env is not None, "vec_env is required for evaluation"
+
+        if seed is None:                                  # pick a fresh one
+            seed = int(time.time() * 1e6) & 0xFFFFFFFF
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        if hasattr(self.vec_env.env, "set_seed"):
+            self.vec_env.env.set_seed(seed)                     # AllegroArmMOAR has this
+        elif hasattr(self.vec_env, "seed"):                     # fallback (rare)
+            self.vec_env.seed(seed)
         self.student_actor_critic.eval()
 
         n_envs          = self.vec_env.env.num_envs
@@ -765,7 +775,8 @@ class DistillWarmUpTrainer:
 
     @torch.no_grad()
     def evaluate_teacher(self,
-                        render=  False):
+                        render=  False,
+                        seed= None):
         """
         Run one evaluation pass with the **expert / teacher** policy.
 
@@ -777,6 +788,16 @@ class DistillWarmUpTrainer:
             Lists of per-episode returns and lengths, in env-index order.
         """
         assert self.vec_env is not None, "`vec_env` must be initialised"
+        if seed is None:                                  # pick a fresh one
+            seed = int(time.time() * 1e6) & 0xFFFFFFFF
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        if hasattr(self.vec_env.env, "set_seed"):
+            self.vec_env.env.set_seed(seed)                     # AllegroArmMOAR has this
+        elif hasattr(self.vec_env, "seed"):                     # fallback (rare)
+            self.vec_env.seed(seed)
 
         # ─── make sure weights are loaded & switch to eval ────────────────────────
         self.teacher_load(f"{self.teacher_log_dir}/{self.teacher_resume}.pth")
@@ -841,6 +862,201 @@ class DistillWarmUpTrainer:
         return ep_returns, ep_lengths
 
     @torch.no_grad()
+    def continuous_eval_loop(self,
+                            log_every: int = 100,      # env steps
+                            window: int = 100,
+                            max_steps=None,
+                            render: bool = False):
+        """
+        Run the *teacher* policy indefinitely (or until `max_steps`) without training,
+        printing a moving-window summary of episode returns every `log_every` steps.
+        """
+
+        # ── load teacher weights (if any) & switch to eval ─────────────────────
+        if self.teacher_resume not in (None, "None"):
+            self.teacher_load(f"{self.teacher_log_dir}/{self.teacher_resume}.pth")
+        net = self.teacher_actor_critic
+        net.eval()
+
+        # ── helpers ────────────────────────────────────────────────────────────
+        meter = torch_ext.AverageMeter(in_shape=(self.value_size,),
+                                    max_size=window).to(self.device)
+
+        ep_returns = torch.zeros(self.vec_env.env.num_envs, device=self.device)
+        ep_lengths = torch.zeros_like(ep_returns)
+
+        obs             = self.vec_env.reset()
+        total_env_steps = 0
+        next_report     = log_every
+
+        while max_steps is None:
+            # ---- build observation exactly like play_teacher_forever ----------
+            teacher_obs        = obs.copy()
+            teacher_obs["obs"] = obs["obs"]["obs"]     # unwrap dict-of-dict
+
+            res     = self.get_action_values(net, teacher_obs, mode="teacher")
+            actions = torch.clamp(res["actions"], -1.0, 1.0)
+
+            # ---- environment step --------------------------------------------
+            obs, rew, done, _ = self.vec_env.step(actions)
+
+            # ---- bookkeeping --------------------------------------------------
+            r = rew.squeeze().to(self.device).float()   # (num_envs,)
+            d = done.to(self.device).bool()
+
+            ep_returns += r
+            ep_lengths += 1
+
+            finished_idx = d.nonzero(as_tuple=False).view(-1)   # which envs ended?
+
+            if finished_idx.numel():
+                meter.update(ep_returns[finished_idx])
+
+                # reset trackers for just-finished envs so they can start anew
+                ep_returns[finished_idx] = 0.0
+                ep_lengths[finished_idx] = 0
+
+            total_env_steps += 1
+
+            # ---- periodic console output -------------------------------------
+            if total_env_steps % next_report == 0:
+                stats = meter.get_stats()                # dict with ndarray entries
+
+                # ── unpack scalars cleanly ───────────────────────────────────────────
+
+                print(f"[teacher] step", total_env_steps)
+                print(f"[Rewards] μ={stats['mean'][0]:.3f}  σ={stats['std'][0]:.3f}  "
+							f"min={stats['min'][0]:.3f}  max={stats['max'][0]:.3f}  "
+							f"median={stats['median'][0]:.3f}  n={stats['n']}")
+
+    @torch.no_grad()
+    def continuous_eval_loop_student(self,
+                                    log_every: int = 5,      # env-steps
+                                    window: int  = 100,
+                                    max_steps = None,
+                                    render: bool = False):
+        """
+        Continuous evaluation loop for the *student* policy.
+        Mirrors `continuous_eval_loop` (teacher version) line-for-line,
+        but with the student network and student-specific observation
+        preprocessing.
+
+        Prints a sliding-window summary of episode returns every
+        `log_every` vector-env steps until `max_steps` (or forever).
+        """
+
+        # ─── network & mode ────────────────────────────────────────────────
+        net = self.student_actor_critic
+        net.eval()                           # no dropout / BN update
+
+        # ─── helpers ───────────────────────────────────────────────────────
+        meter = torch_ext.AverageMeter(
+                    in_shape=(self.value_size,), max_size=window
+                ).to(self.device)
+
+        n_envs      = self.vec_env.env.num_envs
+        ep_returns  = torch.zeros(n_envs, device=self.device)
+        ep_lengths  = torch.zeros_like(ep_returns)
+
+        obs             = self.vec_env.reset()
+        total_env_steps = 0
+        next_report     = log_every
+
+        while max_steps is None or total_env_steps < max_steps:
+
+            # ---------- build obs exactly like evaluate_student ------------
+            if self.ablation_mode != "no-pc":
+                obs_in = {
+                    'obs'       : torch.as_tensor(obs['obs']['student_obs'],
+                                                device=self.device),
+                    'pointcloud': torch.as_tensor(obs['obs']['pointcloud'],
+                                                device=self.device)
+                }
+            else:
+                obs_in = torch.as_tensor(obs['obs']['student_obs'],
+                                        device=self.device)
+
+            inp = {
+                'is_train'   : False,
+                'prev_actions': None,
+                'obs'        : self._preproc_obs(obs_in),
+                'rnn_states' : self.rnn_states
+            }
+
+            # ---------- forward pass & env step ----------------------------
+            actions = torch.clamp(net(inp)['actions'], -1.0, 1.0)
+            obs, rew, done, _ = self.vec_env.step(actions)
+
+            # ---------- bookkeeping ---------------------------------------
+            r = rew.squeeze().to(self.device).float()         # (n_envs,)
+            d = done.to(self.device).bool()                   # (n_envs,)
+
+            ep_returns += r
+            ep_lengths += 1
+
+            finished_idx = d.nonzero(as_tuple=False).view(-1)
+
+            if finished_idx.numel():
+                meter.update(ep_returns[finished_idx])
+
+                # reset trackers for those envs
+                ep_returns[finished_idx] = 0.0
+                ep_lengths[finished_idx] = 0
+
+            total_env_steps += 1         # count ALL parallel steps
+
+            # ---------- periodic print ------------------------------------
+            if total_env_steps % next_report == 0:
+                stats = meter.get_stats()
+
+                n      = int(stats['n'])
+                mean   = float(stats['mean'])
+                std    = float(stats['std'])
+                vmin   = float(stats['min'])
+                vmax   = float(stats['max'])
+
+                print(f"[student] step {total_env_steps}  "
+                    f"n={n:3d}  mean={mean:.2f} ±{std:.2f}  "
+                    f"min={vmin:.2f}  max={vmax:.2f}")
+
+            if render and hasattr(self.vec_env, "render"):
+                self.vec_env.render(mode="human")
+
+    @torch.no_grad()
+    def play_teacher_forever(self, render: bool = False, log_rewards: bool = True):
+        # ── load weights (if any) & switch to eval ───────────────────────────
+        if self.teacher_resume not in (None, "None"):
+            self.teacher_load(f"{self.teacher_log_dir}/{self.teacher_resume}.pth")
+        self.teacher_actor_critic.eval()
+
+        obs = self.vec_env.reset()
+
+        while True:
+            teacher_obs        = obs.copy()
+            teacher_obs["obs"] = obs["obs"]["obs"]
+
+            res     = self.get_action_values(self.teacher_actor_critic,
+                                            teacher_obs,
+                                            mode="teacher")
+            actions = torch.clamp(res["actions"], -1.0, 1.0)
+
+            obs, rew, done, _ = self.vec_env.step(actions)
+
+            if log_rewards:
+                rew_np = (rew.cpu().numpy()
+                        if torch.is_tensor(rew) else np.asarray(rew))
+
+                if rew_np.ndim == 0:                               # single-env case
+                    print(f"Reward: {rew_np.item():.4f}")
+                else:                                              # multi-env case
+                    print("Rewards:",
+                        " | ".join(f"{i}: {r:.4f}"
+                                    for i, r in enumerate(rew_np)))
+
+            if render and hasattr(self.vec_env, "render"):
+                self.vec_env.render(mode="human")
+
+    @torch.no_grad()
     def collect_dagger_rollouts(self,
                                 horizon: int = 5000,
                                 save_every: int = 200,
@@ -852,6 +1068,16 @@ class DistillWarmUpTrainer:
         The *student* policy drives the env; the *teacher* labels each state.
         """
         # ───────────────────── setup ───────────────────────────────────────────
+
+        seed = int(time.time() * 1e6) & 0xFFFFFFFF
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        if hasattr(self.vec_env.env, "set_seed"):
+            self.vec_env.env.set_seed(seed)                     # AllegroArmMOAR has this
+        elif hasattr(self.vec_env, "seed"):                     # fallback (rare)
+            self.vec_env.seed(seed)
 
         current_obs = self.vec_env.reset()
         current_states = self.vec_env.env.get_state()

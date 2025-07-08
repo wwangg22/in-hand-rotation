@@ -61,7 +61,8 @@ def process_distill_trainer(env, cfg_train, teacher_logdir, student_logdir, teac
             ablation_mode=ablation_mode,
             student_resume = cfg_train.get("student_resume", "None"),
         )
-    elif bc_training == "collect":
+    # elif bc_training == "collect":
+    else:
         distill_trainer = DistillCollector(
             teacher_params=teacher_params,
             student_params=student_params,
@@ -105,7 +106,5 @@ def process_distill_trainer(env, cfg_train, teacher_logdir, student_logdir, teac
             warmup_mode=warmup_mode,
             batch_size=batch_size
         )
-    else:
-        raise NotImplementedError
-
+   
     return distill_trainer

@@ -20,3 +20,5 @@ return | mean: -43.23  std: 32.80  min: -111.49  max: 173.96
    steps | mean: 16.8  std: 30.5  min: 1      max: 199
 
 1000
+return | mean: -48.35  std: 18.48  min: -112.31  max: 46.13
+   steps | mean: 13.9  std: 19.4  min: 1      max: 150

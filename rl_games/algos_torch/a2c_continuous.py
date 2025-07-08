@@ -198,4 +198,3 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
             b_loss = 0
         return b_loss
 
-

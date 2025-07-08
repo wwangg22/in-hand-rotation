@@ -320,32 +320,122 @@ class CategoricalMasked(torch.distributions.Categorical):
         return -p_log_p.sum(-1)
 
 class AverageMeter(nn.Module):
-    def __init__(self, in_shape, max_size):
-        super(AverageMeter, self).__init__()
-        self.max_size = max_size
-        self.current_size = 0
-        self.register_buffer("mean", torch.zeros(in_shape, dtype = torch.float32))
+    """
+    Sliding-window episode-return tracker compatible with both the new stats
+    callers *and* the old code that expected `.mean` / `._sum`.
 
-    def update(self, values):
-        size = values.size()[0]
-        if size == 0:
+    Parameters
+    ----------
+    in_shape : int or tuple
+        Shape of a single return; e.g. 1 or (1,), or (value_size,).
+    max_size : int
+        Number of recent episodes to keep.
+    """
+    def __init__(self, in_shape, max_size: int = 100):
+        super().__init__()
+
+        # --- 1. Accept int OR tuple -----------------------------------------
+        if isinstance(in_shape, int):
+            in_shape = (in_shape,)
+
+        self.max_size = int(max_size)
+        self.register_buffer("_buf", torch.zeros((self.max_size, *in_shape),
+                                                 dtype=torch.float32))
+        self._next         = 0          # circular index
+        self.current_size  = 0          # how many episodes actually stored
+
+        # legacy running mean (GPU tensor)
+        self.register_buffer("mean", torch.zeros(in_shape, dtype=torch.float32))
+
+        # ------------------------------------------------------------------ #
+
+    # ------------------------ public API ---------------------------------- #
+    def update(self, values: torch.Tensor) -> None:
+        """
+        Add one or more finished-episode returns.
+
+        `values` shape ⇒  (batch, *in_shape)
+        """
+        if values.numel() == 0:
             return
-        new_mean = torch.mean(values.float(), dim=0)
-        size = np.clip(size, 0, self.max_size)
-        old_size = min(self.max_size - size, self.current_size)
-        size_sum = old_size + size
-        self.current_size = size_sum
-        self.mean = (self.mean * old_size + new_mean * size) / size_sum
+
+        values = values.reshape(-1, *self._buf.shape[1:]).to(self._buf.dtype)
+
+        # keep at most max_size recent episodes
+        if values.shape[0] >= self.max_size:
+            values = values[-self.max_size:]
+
+        n = values.shape[0]
+        idx = (torch.arange(n, device=values.device) + self._next) % self.max_size
+        self._buf[idx] = values
+
+        # ---- update counters & legacy running mean ----------------------- #
+        self._next = (self._next + n) % self.max_size
+        prev_n     = self.current_size
+        self.current_size = min(prev_n + n, self.max_size)
+
+        # incremental running mean (for compatibility)
+        total = prev_n + n
+        if total:
+            self.mean = (self.mean * prev_n + values.mean(0) * n) / total
 
     def clear(self):
         self.current_size = 0
-        self.mean.fill_(0)
+        self._next = 0
+        self._buf.zero_()
+        self.mean.zero_()
 
+    # --- stats helpers ---------------------------------------------------- #
+    def get_mean(self)   -> np.ndarray: return self._stat(torch.mean)
+    def get_std(self)    -> np.ndarray: return self._stat(torch.std, unbiased=False)
+    def get_min(self)    -> np.ndarray: return self._stat(torch.min)
+    def get_max(self)    -> np.ndarray: return self._stat(torch.max)
+    def get_median(self) -> np.ndarray: return self._stat(torch.median)
+
+    def get_stats(self) -> dict:
+        return dict(mean   = self.get_mean(),
+                    std    = self.get_std(),
+                    median = self.get_median(),
+                    min    = self.get_min(),
+                    max    = self.get_max(),
+                    n      = int(self.current_size))
+
+    # ----------------------- legacy accessors ----------------------------- #
+    @property
+    def _sum(self):
+        """
+        Legacy attribute used by some code paths:
+        returns a *view* of the valid slice of the buffer, on the same device.
+        """
+        return self._buf[:self.current_size]
+
+    # alias so hasattr(..., "sum") also works
+    @property
+    def sum(self):
+        return self._sum
+
+    # ---------------------------- utils ----------------------------------- #
     def __len__(self):
-        return self.current_size
+        return int(self.current_size)
 
-    def get_mean(self):
-        return self.mean.squeeze(0).cpu().numpy()
+    def _stat(self, fn, *args, **kwargs):
+        """
+        Apply `fn` (mean, std, min, max, median …) along dim-0 of the stored
+        slice and return a numpy array.  Handles ops that return a tuple
+        (e.g. torch.median) by taking the `.values` / first element.
+        """
+        if self.current_size == 0:
+            return torch.full(self._buf.shape[1:], float("nan")).cpu().numpy()
+
+        data = self._buf[:self.current_size]
+        out  = fn(data, *args, dim=0, **kwargs)   # may be Tensor or tuple
+
+        # torch.median / topk … return (values, indices)
+        if isinstance(out, (tuple, list)):
+            out = out[0] if len(out) else out
+
+        return out.cpu().numpy()
+
 
 
 class IdentityRNN(nn.Module):

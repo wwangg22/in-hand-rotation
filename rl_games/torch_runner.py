@@ -100,6 +100,10 @@ class Runner:
         print('Started to train')
         agent = self.algo_factory.create(self.algo_name, base_name='run', params=self.params)
         _restore(agent, args)
+        # for name, p in agent.model.named_parameters():
+        #     print(name, p.shape)
+        w = dict(agent.model.named_parameters())["a2c_network.actor_mlp.2.weight"][0,:5]
+        print("first weight =", w)
         _override_sigma(agent, args)
         agent.train()
 

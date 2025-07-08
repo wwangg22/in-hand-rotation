@@ -35,7 +35,7 @@ num_subscenes: 4 # Splits the simulation into N physics scenes and runs each one
 # test - if set, run policy in inference mode (requires setting checkpoint to load)
 test: False
 # used to set checkpoint path
-checkpoint: ''
+checkpoint: '' #'/home/william/Desktop/USC/in-hand-rotation/runs/baoding2/baodingS1.0_C0.0_M0.02025-07-06_17-06-24-3278/nn/last_baoding2_ep_600_rew_897.47614.pth' #'/home/william/Downloads/last_baoding_ep_500_rew_1228.5563.pth'
 # set to True to use multi-gpu horovod training
 multi_gpu: False
 

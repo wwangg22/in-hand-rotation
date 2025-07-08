@@ -173,6 +173,10 @@ class AllegroArmMOAR(VecTask):
             "cross4_0": "urdf/objects/cross4_0.urdf", "cross4_1": "urdf/objects/cross4_1.urdf", "cross4_2": "urdf/objects/cross4_2.urdf", "cross4_3": "urdf/objects/cross4_3.urdf", "cross4_4": "urdf/objects/cross4_4.urdf",
             "custom_obj1_cylinder": "urdf/objects/custom_obj1_cylinder.urdf",
             "cup": "urdf/objects/model.urdf",
+            "screwdriver": "urdf/objects/screwdriver.urdf",
+            "powerdrill": "urdf/objects/powerdrill.urdf",
+            "hammer": "urdf/objects/hammer.urdf",
+            "knife": "urdf/objects/knife.urdf",
         }
 
         self.object_sets = {
@@ -184,7 +188,7 @@ class AllegroArmMOAR(VecTask):
                   'set_obj10_thin_block_corner', 'set_obj11_cylinder', 'set_obj12_cylinder_corner',
                   'set_obj13_irregular_block', 'set_obj14_irregular_block_cross', 'set_obj15_irregular_block_time',
                   'set_obj16_cylinder_axis'],
-            "custom": ["custom_obj1_cylinder", "cup"]
+            "custom": ["custom_obj1_cylinder", "powerdrill"] #"cup", "screwdriver", "powerdrill", "hammer"],
         }
 
         self.object_set_id = self.cfg["env"].get("objSet", "0")
@@ -534,10 +538,9 @@ class AllegroArmMOAR(VecTask):
         for used_objects in self.used_training_objects:
             object_asset_file = self.asset_files_dict[used_objects]
             object_asset_options = gymapi.AssetOptions()
+            object_asset_options.use_mesh_materials = True
             
-
             object_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
-
             object_asset_options.disable_gravity = True
 
             goal_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
@@ -736,7 +739,7 @@ class AllegroArmMOAR(VecTask):
                                                         device=self.device)
 
             # add object
-            obj_class_indice = np.random.randint(0, len(self.used_training_objects), 1)[0]
+            obj_class_indice = 1 #np.random.randint(0, len(self.used_training_objects), 1)[0]
             select_obj = self.used_training_objects[obj_class_indice]
             # randomize initial quat
             if self.object_set_id == "cross" or self.object_set_id == "custom": 
@@ -1938,7 +1941,7 @@ class AllegroArmMOAR(VecTask):
                 self.reset_position_noise * rand_floats[:, 0:2]
             self.root_state_tensor[self.object_indices[env_ids], self.up_axis_idx] = self.object_init_state[env_ids, ..., self.up_axis_idx] + \
                 self.reset_position_noise * rand_floats[:, self.up_axis_idx]
-            self.root_state_tensor[self.object_indices[env_ids], 2] += 0.02  # +2 cm
+            # self.root_state_tensor[self.object_indices[env_ids], 2] += 0.02  # +2 cm
         
         if not self.use_initial_rotation:
             # legacy codes.

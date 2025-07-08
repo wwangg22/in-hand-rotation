@@ -18,5 +18,5 @@ distill.teacher_data_dir=demonstration-baoding-2 \
 distill.student_logdir=runs/student/bc-baoding-multimodplus-2 \
 train.params.config.user_prefix=bc-baoding-multimodplus \
 task.env.ablation_mode=multi-modality-plus \
-experiment=bc-baoding-multimodplus wandb_activate=True \
+experiment=bc-baoding-multimodplus-2 wandb_activate=True \
 ${EXTRA_ARGS}

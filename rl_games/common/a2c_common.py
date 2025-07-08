@@ -185,7 +185,7 @@ class A2CBase(BaseAlgorithm):
 		self.gamma = self.config['gamma']
 		self.tau = self.config['tau']
 
-		self.games_to_track = self.config.get('games_to_track', 100)
+		self.games_to_track = self.config.get('games_to_track', 1000)
 		print('current training device:', self.ppo_device)
 		self.game_rewards = torch_ext.AverageMeter(self.value_size, self.games_to_track).to(self.ppo_device)
 		self.game_lengths = torch_ext.AverageMeter(1, self.games_to_track).to(self.ppo_device)
@@ -1057,6 +1057,26 @@ class DiscreteA2CBase(A2CBase):
 				return self.last_mean_rewards, epoch_num
 
 
+def reward_stats(buf):
+    """
+    buf: 1-D or 2-D tensor / ndarray with episode returns.
+    Returns a dict of simple descriptive stats as python floats.
+    """
+    if isinstance(buf, np.ndarray):
+        buf = torch.from_numpy(buf)
+    buf = buf.to(torch.float32).flatten()
+
+    if buf.numel() == 0:
+        # nothing recorded yet
+        return dict(mean=float('nan'), std=float('nan'),
+                    median=float('nan'), min=float('nan'), max=float('nan'))
+
+    return dict(mean   = buf.mean().item(),
+                std    = buf.std(unbiased=False).item(),
+                median = buf.median().item(),
+                min    = buf.min().item(),
+                max    = buf.max().item())
+
 class ContinuousA2CBase(A2CBase):
 	def __init__(self, base_name, params):
 		A2CBase.__init__(self, base_name, params)
@@ -1256,7 +1276,15 @@ class ContinuousA2CBase(A2CBase):
 					fps_step_inference = curr_frames / scaled_play_time
 					fps_total = curr_frames / scaled_time
 					print(f'fps step: {fps_step:.0f} fps step and policy inference: {fps_step_inference:.0f} fps total: {fps_total:.0f} epoch: {epoch_num}/{self.max_epochs}')
-
+					if self.game_rewards.current_size > 0:
+						mean_rewards = self.game_rewards.get_mean()
+						mean_lengths = self.game_lengths.get_mean()
+						stats = self.game_rewards.get_stats()
+						print(f"[Rewards] μ={stats['mean'][0]:.3f}  σ={stats['std'][0]:.3f}  "
+							f"min={stats['min'][0]:.3f}  max={stats['max'][0]:.3f}  "
+							f"median={stats['median'][0]:.3f}  n={stats['n']}")
+					print(f'epoch: {epoch_num}, mean rewards: {mean_rewards}, mean lengths: {mean_lengths}')
+					
 				self.write_stats(total_time, epoch_num, step_time, play_time, update_time, a_losses, c_losses, entropies, kls, last_lr, lr_mul, frame, scaled_time, scaled_play_time, curr_frames)
 				if len(b_losses) > 0:
 					self.writer.add_scalar('losses/bounds_loss', torch_ext.mean_list(b_losses).item(), frame)

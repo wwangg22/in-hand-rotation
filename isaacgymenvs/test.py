@@ -199,8 +199,10 @@ def launch_rlg_hydra(cfg: DictConfig):
     #     log_interval=cfg_distill["learn"]["save_interval"]
     # )
 
-    print("ABOUT TO EVAL STUDENT!!")
+    print("ABOUT TO EVAL TEACHER!")
     distiller.evaluate_teacher()
+    # distiller.continuous_eval_loop()
+    # distiller.play_teacher_forever()
 
     if cfg.wandb_activate and rank == 0:
         wandb.finish()

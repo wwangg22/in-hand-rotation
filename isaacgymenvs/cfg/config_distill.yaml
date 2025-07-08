@@ -15,10 +15,10 @@ distill:
   teacher_data_dir: demonstration-baoding-2
   worker_id: 0
   bc_warmup: True
-  teacher_logdir: /home/william/Desktop/USC/in-hand-rotation/runs/baoding/baodingS1.0_C0.0_M0.02025-06-08_19-28-12-3278/nn
-  student_logdir: runs/student/bc-baoding-multimodplus-3 #runs/student/new-no-vision-2  
-  teacher_resume: last_baoding_ep_5300_rew_1268.9863
-  student_resume: model_bc_20000
+  teacher_logdir: /home/william/Downloads #/home/william/Desktop/USC/in-hand-rotation/runs/baoding/baodingS1.0_C0.0_M0.02025-06-08_19-28-12-3278/nn
+  student_logdir: /home/william/Downloads #runs/student/bc-baoding-multimodplus-3 #runs/student/new-no-vision-2  
+  teacher_resume: last_baoding_ep_500_rew_1228.5563 #last_baoding_ep_5300_rew_1268.9863
+  student_resume: None
   vidlogdir: 'video'
   vid_log_step: 500
   log_video: False

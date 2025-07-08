@@ -200,7 +200,8 @@ def launch_rlg_hydra(cfg: DictConfig):
     # )
 
     print("ABOUT TO EVAL STUDENT!!")
-    distiller.evaluate_student()
+    # distiller.evaluate_student()
+    distiller.continuous_eval_loop_student()
 
     if cfg.wandb_activate and rank == 0:
         wandb.finish()
