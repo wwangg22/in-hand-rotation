@@ -41,6 +41,8 @@ import pytorch3d.transforms as transform
 import torch.nn.functional as F
 import json
 
+import trimesh, pathlib, functools
+
 import random
 
 def read_dict_from_json(file_path):
@@ -172,11 +174,100 @@ class AllegroArmMOAR(VecTask):
             "set_obj9_thin_block": "urdf/objects/set_obj9_thin_block.urdf",
             "cross4_0": "urdf/objects/cross4_0.urdf", "cross4_1": "urdf/objects/cross4_1.urdf", "cross4_2": "urdf/objects/cross4_2.urdf", "cross4_3": "urdf/objects/cross4_3.urdf", "cross4_4": "urdf/objects/cross4_4.urdf",
             "custom_obj1_cylinder": "urdf/objects/custom_obj1_cylinder.urdf",
-            "cup": "urdf/objects/model.urdf",
-            "screwdriver": "urdf/objects/screwdriver.urdf",
-            "powerdrill": "urdf/objects/powerdrill.urdf",
-            "hammer": "urdf/objects/hammer.urdf",
+            "black_marker": "urdf/objects/black_marker.urdf",
+            "bleach_cleanser": "urdf/objects/bleach_cleanser.urdf",
+            "blue_cup": "urdf/objects/blue_cup.urdf",
+            "blue_marker": "urdf/objects/blue_marker.urdf",
+            "blue_moon": "urdf/objects/blue_moon.urdf",
+            "blue_plate": "urdf/objects/blue_plate.urdf",
+            "blue_tea_box": "urdf/objects/blue_tea_box.urdf",
+            "book_1": "urdf/objects/book_1.urdf",
+            "book_2": "urdf/objects/book_2.urdf",
+            "book_3": "urdf/objects/book_3.urdf",
+            "book_4": "urdf/objects/book_4.urdf",
+            "book_5": "urdf/objects/book_5.urdf",
+            "book_6": "urdf/objects/book_6.urdf",
+            "book_holder_1": "urdf/objects/book_holder_1.urdf",
+            "book_holder_2": "urdf/objects/book_holder_2.urdf",
+            "book_holder_3": "urdf/objects/book_holder_3.urdf",
+            "bowl": "urdf/objects/bowl.urdf",
+            "cleanser": "urdf/objects/cleanser.urdf",
+            "clear_box": "urdf/objects/clear_box.urdf",
+            "clear_box_1": "urdf/objects/clear_box_1.urdf",
+            "clear_box_2": "urdf/objects/clear_box_2.urdf",
+            "conditioner": "urdf/objects/conditioner.urdf",
+            "correction_fluid": "urdf/objects/correction_fluid.urdf",
+            "cracker_box": "urdf/objects/cracker_box.urdf",
+            "doraemon_bowl": "urdf/objects/doraemon_bowl.urdf",
+            "doraemon_plate": "urdf/objects/doraemon_plate.urdf",
+            "extra_large_clamp": "urdf/objects/extra_large_clamp.urdf",
+            "flat_screwdriver": "urdf/objects/flat_screwdriver.urdf",
+            "fork": "urdf/objects/fork.urdf",
+            "gelatin_box": "urdf/objects/gelatin_box.urdf",
+            "glue_1": "urdf/objects/glue_1.urdf",
+            "glue_2": "urdf/objects/glue_2.urdf",
+            "green_bowl": "urdf/objects/green_bowl.urdf",
+            "green_cup": "urdf/objects/green_cup.urdf",
+            "grey_plate": "urdf/objects/grey_plate.urdf",
             "knife": "urdf/objects/knife.urdf",
+            "large_clamp": "urdf/objects/large_clamp.urdf",
+            "large_marker": "urdf/objects/large_marker.urdf",
+            "lipton_tea": "urdf/objects/lipton_tea.urdf",
+            "magic_clean": "urdf/objects/magic_clean.urdf",
+            "medium_clamp": "urdf/objects/medium_clamp.urdf",
+            "mini_claw_hammer_1": "urdf/objects/mini_claw_hammer_1.urdf",
+            "mug": "urdf/objects/mug.urdf",
+            "orange_cup": "urdf/objects/orange_cup.urdf",
+            "orion_pie": "urdf/objects/orion_pie.urdf",
+            "pen_container_1": "urdf/objects/pen_container_1.urdf",
+            "phillips_screwdriver": "urdf/objects/phillips_screwdriver.urdf",
+            "pink_tea_box": "urdf/objects/pink_tea_box.urdf",
+            "pitcher": "urdf/objects/pitcher.urdf",
+            "plastic_apple": "urdf/objects/plastic_apple.urdf",
+            "plastic_banana": "urdf/objects/plastic_banana.urdf",
+            "plastic_lemon": "urdf/objects/plastic_lemon.urdf",
+            "plastic_orange": "urdf/objects/plastic_orange.urdf",
+            "plastic_peach": "urdf/objects/plastic_peach.urdf",
+            "plastic_pear": "urdf/objects/plastic_pear.urdf",
+            "plastic_plum": "urdf/objects/plastic_plum.urdf",
+            "plastic_strawberry": "urdf/objects/plastic_strawberry.urdf",
+            "plate": "urdf/objects/plate.urdf",
+            "plate_holder": "urdf/objects/plate_holder.urdf",
+            "poker_1": "urdf/objects/poker_1.urdf",
+            "potato_chip_1": "urdf/objects/potato_chip_1.urdf",
+            "potato_chip_2": "urdf/objects/potato_chip_2.urdf",
+            "potato_chip_3": "urdf/objects/potato_chip_3.urdf",
+            "power_drill": "urdf/objects/power_drill.urdf",
+            "pudding_box": "urdf/objects/pudding_box.urdf",
+            "red_marker": "urdf/objects/red_marker.urdf",
+            "remote_controller_1": "urdf/objects/remote_controller_1.urdf",
+            "remote_controller_2": "urdf/objects/remote_controller_2.urdf",
+            "repellent": "urdf/objects/repellent.urdf",
+            "round_plate_1": "urdf/objects/round_plate_1.urdf",
+            "round_plate_2": "urdf/objects/round_plate_2.urdf",
+            "round_plate_3": "urdf/objects/round_plate_3.urdf",
+            "round_plate_4": "urdf/objects/round_plate_4.urdf",
+            "scissors": "urdf/objects/scissors.urdf",
+            "shampoo": "urdf/objects/shampoo.urdf",
+            "small_clamp": "urdf/objects/small_clamp.urdf",
+            "small_marker": "urdf/objects/small_marker.urdf",
+            "soap": "urdf/objects/soap.urdf",
+            "soap_dish": "urdf/objects/soap_dish.urdf",
+            "spoon": "urdf/objects/spoon.urdf",
+            "square_plate_1": "urdf/objects/square_plate_1.urdf",
+            "square_plate_2": "urdf/objects/square_plate_2.urdf",
+            "square_plate_3": "urdf/objects/square_plate_3.urdf",
+            "square_plate_4": "urdf/objects/square_plate_4.urdf",
+            "stapler_1": "urdf/objects/stapler_1.urdf",
+            "stapler_2": "urdf/objects/stapler_2.urdf",
+            "sugar_box": "urdf/objects/sugar_box.urdf",
+            "suger_1": "urdf/objects/suger_1.urdf",
+            "suger_2": "urdf/objects/suger_2.urdf",
+            "suger_3": "urdf/objects/suger_3.urdf",
+            "toothpaste_1": "urdf/objects/toothpaste_1.urdf",
+            "two_color_hammer": "urdf/objects/two_color_hammer.urdf",
+            "yellow_bowl": "urdf/objects/yellow_bowl.urdf",
+            "yellow_cup": "urdf/objects/yellow_cup.urdf",
         }
 
         self.object_sets = {
@@ -188,7 +279,28 @@ class AllegroArmMOAR(VecTask):
                   'set_obj10_thin_block_corner', 'set_obj11_cylinder', 'set_obj12_cylinder_corner',
                   'set_obj13_irregular_block', 'set_obj14_irregular_block_cross', 'set_obj15_irregular_block_time',
                   'set_obj16_cylinder_axis'],
-            "custom": ["custom_obj1_cylinder", "powerdrill"] #"cup", "screwdriver", "powerdrill", "hammer"],
+            "custom": ["custom_obj1_cylinder",  "power_drill"], #"cup", "screwdriver", "powerdrill", "hammer"],
+            "working":["black_marker", "bleach_cleanser", "blue_cup", 
+                "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", 
+                "conditioner", "correction_fluid", "bowl", "scissors", "mug","fork",
+                "phillips_screwdriver", "flat_screwdriver", "extra_large_clamp", "large_clamp",
+                "power_drill", "knife"],
+            "custom2": [ "black_marker", "bleach_cleanser", "blue_cup", 
+                "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", "book_1", "book_2", 
+                "book_3", "book_4", "book_5", "book_6", "book_holder_1", "book_holder_2", "book_holder_3", 
+                "bowl", "cleanser", "clear_box", "clear_box_1", "clear_box_2", "conditioner", "correction_fluid", 
+                "cracker_box", "doraemon_bowl", "doraemon_plate", "extra_large_clamp", "flat_screwdriver", 
+                "fork", "gelatin_box", "glue_1", "glue_2", "green_bowl", "green_cup", "grey_plate", "knife", 
+                "large_clamp", "large_marker", "lipton_tea", "magic_clean", "medium_clamp", "mini_claw_hammer_1", 
+                "mug", "orange_cup", "orion_pie", "pen_container_1", "phillips_screwdriver", "pink_tea_box", 
+                "pitcher", "plastic_apple", "plastic_banana", "plastic_lemon", "plastic_orange", "plastic_peach", 
+                "plastic_pear", "plastic_plum", "plastic_strawberry", "plate", "plate_holder", "poker_1", 
+                "potato_chip_1", "potato_chip_2", "potato_chip_3", "power_drill", "pudding_box", "red_marker", 
+                "remote_controller_1", "remote_controller_2", "repellent", "round_plate_1", "round_plate_2", 
+                "round_plate_3", "round_plate_4", "scissors", "shampoo", "small_clamp", "small_marker", "soap", 
+                "soap_dish", "spoon", "square_plate_1", "square_plate_2", "square_plate_3", "square_plate_4", 
+                "stapler_1", "stapler_2", "sugar_box", "suger_1", "suger_2", "suger_3", "toothpaste_1", 
+                "two_color_hammer", "yellow_bowl", "yellow_cup"]
         }
 
         self.object_set_id = self.cfg["env"].get("objSet", "0")
@@ -560,6 +672,17 @@ class AllegroArmMOAR(VecTask):
         else:
             arm_hand_asset_file = self.robot_asset_files_dict[self.cfg["env"]["sensor"]]
 
+        if self.object_set_id == "working":
+            self.pc_num_points = self.cfg['env'].get('pc_num_points', 100)
+            self.object_pc_buf = torch.zeros(
+                    (self.num_envs, self.pc_num_points, 3),  # (env, N, xyz)
+                    dtype=torch.float32,
+                    device=self.device)
+            self.mesh_cache = {}           # key: asset file name  →  torch (V,3)
+            self.mesh_sampler = functools.lru_cache(maxsize=None)(
+                    lambda fname: torch.as_tensor(
+                        trimesh.load(fname, force='mesh').vertices, dtype=torch.float32))
+
         if "asset" in self.cfg["env"]:
             asset_root = self.cfg["env"]["asset"].get("assetRoot", asset_root)
 
@@ -739,8 +862,30 @@ class AllegroArmMOAR(VecTask):
                                                         device=self.device)
 
             # add object
-            obj_class_indice = 1 #np.random.randint(0, len(self.used_training_objects), 1)[0]
+            obj_class_indice = np.random.randint(0, len(self.used_training_objects), 1)[0]
             select_obj = self.used_training_objects[obj_class_indice]
+            if self.object_set_id == "working":
+                asset_path = os.path.join(asset_root,
+                              "urdf/objects/meshes/custom",
+                              select_obj, "textured.obj")
+
+                # 4.a  load / cache vertices  ------------------------------
+                if asset_path not in self.mesh_cache:
+                    verts_cpu = self.mesh_sampler(asset_path)     # (V,3)  CPU
+                    self.mesh_cache[asset_path] = verts_cpu.to(self.device)
+                verts = self.mesh_cache[asset_path]               # GPU
+
+                # 4.b  random subsample  -------------------------------
+                n_verts = verts.shape[0]
+                if n_verts >= self.pc_num_points:
+                    idx = torch.randperm(n_verts, device=self.device)[:self.pc_num_points]
+                else:                                             # sample-with-replacement
+                    idx = torch.randint(0, n_verts,
+                                        (self.pc_num_points,), device=self.device)
+                pc_local = verts[idx]      # (N,3)  still on GPU
+
+                # 4.c  copy into the big buffer  -------------------------
+                self.object_pc_buf[i].copy_(pc_local)
             # randomize initial quat
             if self.object_set_id == "cross" or self.object_set_id == "custom": 
                 init_theta = random.uniform(-np.pi / 2, np.pi / 2)
@@ -2113,7 +2258,7 @@ class AllegroArmMOAR(VecTask):
 
         self.compute_reward(self.actions)
 
-        if not self.cfg["env"]["legacy_obs"]:
+        if not self.cfg["env"]["legacy_obs"] and self.object_set_id != "working":
             if self.cfg["env"]["pc_mode"] == "cam":
                 self.fetch_camera_observations()
             elif self.cfg["env"]["pc_mode"] == "label":

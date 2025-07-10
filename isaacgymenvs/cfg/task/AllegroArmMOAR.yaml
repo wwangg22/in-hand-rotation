@@ -15,7 +15,7 @@ env:
     obs:
     pointcloud:
       bound: [0.5, 10, -1, 1, 0.12, 0.8]  
-      numSample: 808  
+      numSample: 100 #808  
 
   camera:
     pos: [0.45252319, 0.33285737, 0.5127288]  

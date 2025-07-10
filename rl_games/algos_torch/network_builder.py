@@ -197,7 +197,7 @@ class A2CBuilder(NetworkBuilder):
                 #elif params.pointnet == "large":
                 #    self.pc_encoder = PointNetLarge(point_channel=5)
                 #else:
-                self.pc_encoder = PointNet(point_channel=6)
+                self.pc_encoder = PointNet(point_channel=3 )#6)
 
             if self.has_cnn:
                 if self.permute_input:

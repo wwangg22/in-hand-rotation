@@ -11,7 +11,6 @@ task.env.objSet=custom task=AllegroArmMOAR task.env.axis=z \
 task.env.numEnvs=8192 train.params.config.minibatch_size=16384 \
 train.params.config.central_value_config.minibatch_size=16384 \
 task.env.observationType=full_stack task.env.legacy_obs=True \
-task.env.ablation_mode=no-pc experiment=z-axis-cup \
-checkpoint=${CKPT} \
-wandb_activate=True \
+task.env.ablation_mode=no-pc experiment=z-axis-test \
+wandb_activate=False \
 ${EXTRA_ARGS}

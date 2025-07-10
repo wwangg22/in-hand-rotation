@@ -6,11 +6,10 @@ EXTRA_ARGS=${array[@]:1:$len}
 EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
 
 CUDA_VISIBLE_DEVICES=${GPUS} \
-python ./isaacgymenvs/test.py headless=False \
+python ./isaacgymenvs/test2.py headless=False \
 task.env.objSet=custom task=AllegroArmMOAR task.env.axis=z \
 task.env.numEnvs=1 test=True \
 task.env.observationType=full_stack task.env.legacy_obs=True \
-task.env.ablation_mode=none experiment=z-axix-cylinder \
-checkpoint=${CKPT} \
+task.env.ablation_mode=no-pc experiment=z-axix-cylinder \
 wandb_activate=False \
 ${EXTRA_ARGS}

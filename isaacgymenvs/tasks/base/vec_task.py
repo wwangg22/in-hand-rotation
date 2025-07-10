@@ -310,7 +310,7 @@ class VecTask(Env):
                     space_dict.update({"depth": spaces.Box(low=0, high=1, shape=(cam["height"], cam["width"], 1))})
                 if use_pc:
                     space_dict.update(
-                        {"pointcloud": spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_point, 6))})
+                        {"pointcloud": spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_point, 3))})
                 if self.is_distillation:
                     space_dict.update(
                         {"student_obs": spaces.Box(np.ones(self.num_student_obs) * -np.Inf,
@@ -488,6 +488,9 @@ class VecTask(Env):
                 self.obs_dict["obs"] = {'obs': torch.clamp(self.obs_storage, -self.clip_obs, self.clip_obs).to(self.rl_device)}
         else:
             self.obs_dict["obs"] = torch.clamp(self.obs_storage, -self.clip_obs, self.clip_obs).to(self.rl_device)
+        
+        if self.object_set_id == "working":
+            self.obs_dict['obs']["pointcloud"] = self.object_pc_buf.to(self.rl_device)
 
         # asymmetric actor-critic
         if self.num_states > 0:
@@ -539,7 +542,8 @@ class VecTask(Env):
                                                                dtype=torch.float)
         else:
             self.obs_dict["obs"] = torch.clamp(self.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
-
+        if self.object_set_id == "working":
+            self.obs_dict['obs']["pointcloud"] = torch.zeros_like(self.object_pc_buf, device=self.device, dtype=torch.float)
         # asymmetric actor-critic
         if self.num_states > 0:
             self.obs_dict["states"] = self.get_state()
