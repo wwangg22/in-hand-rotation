@@ -887,7 +887,7 @@ class AllegroArmMOAR(VecTask):
                 # 4.c  copy into the big buffer  -------------------------
                 self.object_pc_buf[i].copy_(pc_local)
             # randomize initial quat
-            if self.object_set_id == "cross" or self.object_set_id == "custom": 
+            if self.object_set_id == "cross" or self.object_set_id == "custom" or self.object_set_id == "working": 
                 init_theta = random.uniform(-np.pi / 2, np.pi / 2)
 
                 # init_theta = np.pi / 4
@@ -896,7 +896,6 @@ class AllegroArmMOAR(VecTask):
                     gymapi.Vec3(0, 0, 1),
                     init_theta
                 )
-
                
 
             if self.object_set_id == "ball":
@@ -1255,6 +1254,9 @@ class AllegroArmMOAR(VecTask):
                         self.max_consecutive_successes, self.av_factor, (self.object_type == "pen"), self.object_set_id
                     )
                 else:
+                    # print('see the different between object_rot and object_init_state')
+                    # print("object_rot: ", self.object_rot[2]
+                    #       , "object_init_state: ", self.object_init_state[2, 3:7])
                     self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], \
                     self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward_finger(
                         torch.tensor(self.spin_coef).to(self.device),
@@ -1268,7 +1270,7 @@ class AllegroArmMOAR(VecTask):
                         self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
                         self.consecutive_successes,
                         self.max_episode_length, self.fingertip_pos, self.object_pos, self.object_rot, self.object_init_pos,
-                        self.object_init_quat, self.object_linvel,
+                        self.object_init_state[: , 3:7], self.object_linvel,
                         self.object_angvel,
                         self.goal_pos, self.goal_rot, self.finger_contacts, self.tip_contacts, self.contact_coef,
                         self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.control_error,
@@ -1282,7 +1284,6 @@ class AllegroArmMOAR(VecTask):
                 raise NotImplementedError
             # print("Reward: ", self.rew_buf.mean().item())
             self.extras['consecutive_successes'] = self.consecutive_successes.mean()
-
             if self.print_success_stat:
                 self.total_resets = self.total_resets + self.reset_buf.sum()
                 direct_average_successes = self.total_successes + self.successes.sum()
@@ -2130,7 +2131,7 @@ class AllegroArmMOAR(VecTask):
             object_indices = torch.unique(torch.cat([self.object_indices[env_ids]]).to(torch.int32))
         # reset spinning axis
         if not self.use_initial_rotation:
-            self.reset_spin_axis(env_ids)
+            self.reset_spin_axis(env_ids, init_quat=new_object_rot)
         else:
             self.reset_spin_axis(env_ids, init_quat=new_object_rot)
 
@@ -2408,14 +2409,14 @@ def compute_hand_reward_finger(
         reward = torch.where(goal_dist >= fall_dist, reward + fall_penalty, reward)
         resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
 
-    if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr" or object_set_id == "custom":
+    if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr" or object_set_id == "custom" or object_set_id == "working":
         pass
     elif object_set_id == "cross" or object_set_id in ["cross3", "cross5", "cross_t", "cross_y"]:
         resets = torch.where(angle_difference > 0.2 * 3.1415926, torch.ones_like(reset_buf), resets)
     else:
         resets = torch.where(angle_difference > 0.4 * 3.1415926, torch.ones_like(reset_buf), resets)
     
-    if object_set_id == "ball":
+    if object_set_id == "ball" or object_set_id == "working":
         pass
     else:
         resets = torch.where(deviation < 0, torch.ones_like(reset_buf), resets)
