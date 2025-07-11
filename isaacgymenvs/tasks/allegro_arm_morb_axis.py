@@ -372,7 +372,7 @@ class AllegroArmMOAR(VecTask):
         self.obs_type = self.cfg["env"]["observationType"]
         self.ablation_mode = self.cfg["env"]["ablation_mode"]
 
-        if not (self.obs_type in ["partial_stack", "full_stack", "full_stack_pointcloud", "partial_stack_pointcloud", "full_stack_baoding", "partial_stack_baoding"]):
+        if not (self.obs_type in ["partial_stack", "full_stack", "full_stack_obj_sem", "full_stack_pointcloud", "partial_stack_pointcloud", "full_stack_baoding", "partial_stack_baoding"]):
             raise Exception(
                 "Unknown type of observations!\nobservationType should be one of: [openai, full_no_vel, full, full_state]")
 
@@ -389,7 +389,7 @@ class AllegroArmMOAR(VecTask):
         self.arm_sensor_names = ["link1", "link2", "link3", "link4", "link5", "link6"]
 
         self.n_stack = self.cfg['env'].get('obs_stack', 4)
-        self.n_obs_dim = 85
+        self.n_obs_dim =  85
         self.pc_ablation = self.cfg["env"]["pc_ablation"]  # if True, only disable pointcloud info in observation
         self.is_distillation = self.cfg["env"]["is_distillation"]
         if self.pc_ablation:
@@ -401,6 +401,7 @@ class AllegroArmMOAR(VecTask):
                 "partial_contact": 45 + 16 + 24,
                 "partial_stack": (45 + 16 + 24) * self.n_stack,
                 "full_stack": (45 + 16 + 24) * self.n_stack + 13,
+                "full_stack_obj_sem": (45+16+24) * self.n_stack + 16,  # 3 for object semantics
                 "full_stack_pointcloud": (45 + 16 + 24) * self.n_stack + 13,
                 "partial_stack_cont": (45 + 16 + 24) * self.n_stack,
                 "partial_stack_pointcloud": (45 + 16 + 24) * self.n_stack,
@@ -414,6 +415,7 @@ class AllegroArmMOAR(VecTask):
                 "partial_contact": 45+16+24,
                 "partial_stack": (45+16+24) * self.n_stack,
                 "full_stack": (45+16+24) * self.n_stack+13,
+                "full_stack_obj_sem": (45+16+24) * self.n_stack + 16,  # 3 for object semantics
                 "nojoint": (16+24) * self.n_stack,
                 "notactile": 69 * self.n_stack,
                 "full_stack_baoding": (45+16+24) * self.n_stack+13*2,
@@ -448,6 +450,8 @@ class AllegroArmMOAR(VecTask):
                 num_states = 101 + 24 + 49 + 16 + self.num_training_objects
             elif self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
                 num_states = (66 + 13 * 2 + 22) + 24 + 49 + self.num_training_objects + 16
+            elif self.obs_type == "full_stack_obj_sem":
+                num_states = 101 + 24 + 49 + 3 + self.num_training_objects + 16
             else:
                 num_states = 101 + 24 + 49 + self.num_training_objects + 16
 
@@ -458,6 +462,21 @@ class AllegroArmMOAR(VecTask):
         self.cfg["env"]["numActions"] = 22
         if self.is_distillation:
             self.num_student_obs = (45 + 16 + 24) * self.n_stack
+
+        #object semantics information
+        self.num_semantics = 3                                  #  mass, μ, scale
+        self.object_semantics = torch.zeros(
+                (self.cfg["env"]["numEnvs"], self.num_semantics),
+                dtype=torch.float32,
+                device="cuda:0" #hardcoded
+        )
+
+        self.friction_min = 0.0
+        self.friction_max = 3.0
+
+        self.scale_min = 0.90 
+        self.scale_max = 1.10
+
 
         super().__init__(config=self.cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
         self.object_class_indices_tensor = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
@@ -887,7 +906,7 @@ class AllegroArmMOAR(VecTask):
                 # 4.c  copy into the big buffer  -------------------------
                 self.object_pc_buf[i].copy_(pc_local)
             # randomize initial quat
-            if self.object_set_id == "cross" or self.object_set_id == "custom" or self.object_set_id == "working": 
+            if self.object_set_id == "cross" or self.object_set_id == "custom": 
                 init_theta = random.uniform(-np.pi / 2, np.pi / 2)
 
                 # init_theta = np.pi / 4
@@ -986,6 +1005,12 @@ class AllegroArmMOAR(VecTask):
                 self.gym.set_actor_rigid_body_properties(env_ptr, object_handle, prop)
 
                 self.objects.append(object_handle)
+                total_mass = sum(p.mass for p in prop)                    # prop from the loop
+                self.object_semantics[i, 0] = total_mass
+                self.object_semantics[i, 1] = ( rand_friction - 0.5 * (self.friction_min + self.friction_max) ) / (0.5 * (self.friction_max - self.friction_min))
+                obj_scale = self.gym.get_actor_scale(env_ptr, object_handle)
+                self.object_semantics[i, 2] = ( obj_scale - 0.5 * (self.scale_min + self.scale_max) ) / (0.5 * (self.scale_max - self.scale_min))
+                
 
             if self.aggregate_mode > 0:
                 self.gym.end_aggregate(env_ptr)
@@ -993,6 +1018,9 @@ class AllegroArmMOAR(VecTask):
             self.envs.append(env_ptr)
             self.arm_hands.append(arm_hand_actor)
             
+        print("1: ", max(self.object_semantics[:,0]), min(self.object_semantics[:,0]))
+        print("2: ", max(self.object_semantics[:,1]), min(self.object_semantics[:,1]))
+        print("3: ", max(self.object_semantics[:,2]), min(self.object_semantics[:,2]))
         self.object_class_indices_tensor = torch.tensor(self.object_class_indices, dtype=torch.long, device=self.device)
 
         palm_handles = self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, self.palm_name)
@@ -1323,6 +1351,8 @@ class AllegroArmMOAR(VecTask):
             self.compute_contact_observations('ps')
         elif self.obs_type == "full_stack":
             self.compute_contact_observations('fs')
+        elif self.obs_type == "full_stack_obj_sem":
+            self.compute_contact_observations('fsos')
         elif self.obs_type == "full_stack_pointcloud":
             self.compute_contact_observations('fspc')
         elif self.obs_type == "partial_stack_pointcloud":
@@ -1512,7 +1542,125 @@ class AllegroArmMOAR(VecTask):
             self.obj_buf[:, 7:10] = self.object_linvel
             self.obj_buf[:, 10:13] = self.vel_obs_scale * self.object_angvel
             self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
-        
+        elif mode == 'fsos':
+            contacts = 48                     # number of contact scalars kept
+            # ============================================================ #
+            # ---------------- PRIVILEGED  (states_buf) ------------------ #
+            # ============================================================ #
+            if self.asymmetric_obs:
+                # 1. proprioception, velocities, forces
+                self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(
+                    self.arm_hand_dof_pos,
+                    self.arm_hand_dof_lower_limits,
+                    self.arm_hand_dof_upper_limits)
+                self.states_buf[:, self.num_arm_hand_dofs:2 * self.num_arm_hand_dofs] = \
+                    self.vel_obs_scale * self.arm_hand_dof_vel
+                self.states_buf[:, 2 * self.num_arm_hand_dofs:3 * self.num_arm_hand_dofs] = \
+                    self.force_torque_obs_scale * self.dof_force_tensor
+
+                # 2. object kinematics  (7 pose | 3 lin-vel | 3 ang-vel)
+                obj_obs_start = 3 * self.num_arm_hand_dofs          # 22 dofs × 3 = 66
+                self.states_buf[:, obj_obs_start      : obj_obs_start + 7]  = self.object_pose
+                self.states_buf[:, obj_obs_start + 7  : obj_obs_start + 10] = self.object_linvel
+                self.states_buf[:, obj_obs_start + 10 : obj_obs_start + 13] = \
+                    self.vel_obs_scale * self.object_angvel
+
+                # 3. NEW: object-semantics (mass, μ, scale)
+                sem_start = obj_obs_start + 13                      # 79
+                self.states_buf[:, sem_start : sem_start + 3] = self.object_semantics
+
+                # 4. rest of privileged obs (all indices shifted +3)
+                obs_end = sem_start + 3                             # 82
+                self.states_buf[:, obs_end : obs_end + self.num_actions] = self.actions
+                self.states_buf[:, obs_end + self.num_actions :
+                                obs_end + self.num_actions + 24]     = self.spin_axis.repeat(1, 8)
+
+                all_contact = self.contact_tensor.reshape(-1, contacts, 3).clone()
+                all_contact = torch.norm(all_contact, dim=-1).float()
+                all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact),
+                                           all_contact / 20.0)
+                self.states_buf[:, obs_end + self.num_actions + 24 :
+                                obs_end + self.num_actions + 24 + contacts] = all_contact
+                self.states_buf[:, obs_end + self.num_actions + 24 + contacts :
+                                obs_end + self.num_actions + 24 + contacts + self.num_training_objects] = \
+                    self.object_one_hot_vector
+
+                end_pos = obs_end + self.num_actions + 24 + contacts + self.num_training_objects
+                self.states_buf[:, end_pos : end_pos + 16] = self.prev_targets[:, 6:22]
+
+            # ============================================================ #
+            # -----------------  POLICY  (last_obs / obs_buf) ------------ #
+            # ============================================================ #
+            self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(
+                self.arm_hand_dof_pos,
+                self.arm_hand_dof_lower_limits,
+                self.arm_hand_dof_upper_limits)
+            self.last_obs_buf[:, 0:6]   = 0.0          # zero arm base
+            self.last_obs_buf[:, 22:45] = 0.0          # zero finger F/T history
+
+            # contacts ---------------------------------------------------- #
+            c_t = self.contact_tensor.reshape(-1, contacts, 3).clone()
+            c_t = c_t[:, self.sensor_handle_indices, :]
+            tip_c = c_t[:, self.fingertip_indices, :]
+
+            c_mag  = torch.norm(c_t,   dim=-1)
+            tip_c  = torch.norm(tip_c, dim=-1)
+            gt_c   = torch.where(c_mag >= 1.0, 1.0, 0.0).clone()
+            tip_c  = torch.where(tip_c >= 0.5, 1.0, 0.0).clone()
+
+            c_bin = torch.where(c_mag >= self.contact_thresh, 1.0, 0.0)
+
+            latency_samples = torch.rand_like(self.last_contacts)
+            latency = torch.where(latency_samples < self.latency, 1, 0)
+            self.last_contacts = self.last_contacts * latency + c_bin * (1 - latency)
+
+            mask = torch.rand_like(self.last_contacts)
+            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
+            sensed_c = torch.where(self.last_contacts > 0.1,
+                                   mask * self.last_contacts, self.last_contacts)
+
+            if self.use_disable:
+                sensed_c[:, self.disable_sensor_idxes] = 0
+            self.sensed_contacts = sensed_c
+            if self.cfg["env"]["legacy_obs"] or not self.headless:
+                if self.viewer:
+                    self.debug_contacts = sensed_c.detach().cpu().numpy()
+
+            # ------------ indices **UNCHANGED** on policy side ------------
+            self.last_obs_buf[:, 45:61] = sensed_c                 # 16-wide
+            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
+
+            # randomisation ------------------------------------------------ #
+            self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
+            self.last_obs_buf[:, 22:29] = 0.0
+            self.last_obs_buf[:, 29:45] = unscale(
+                self.prev_targets,
+                self.arm_hand_dof_lower_limits,
+                self.arm_hand_dof_upper_limits)[:, 6:22]
+
+            # stacking ----------------------------------------------------- #
+            init_ids = torch.where(self.init_stack_buf == 1)[0]
+            self.init_stack_buf[init_ids] = 0
+            self.obs_buf[init_ids, :-16] = self.last_obs_buf[init_ids].repeat(1, self.n_stack)
+            self.obs_buf = torch.cat(
+                (self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim - 16]), dim=-1)
+
+            self.finger_contacts = gt_c
+            self.tip_contacts    = tip_c
+            if self.is_distillation:
+                self.student_obs_buf[:, :] = self.obs_buf.clone()
+
+            # ---------- object block appended to policy obs --------------- #
+            if self.obj_buf.shape[1] != 16:        # initialise once
+                self.obj_buf = torch.zeros((self.num_envs, 16), device=self.device)
+
+            self.obj_buf[:,  : 7]  = self.object_pose
+            self.obj_buf[:,  7:10] = self.object_linvel
+            self.obj_buf[:, 10:13] = self.vel_obs_scale * self.object_angvel
+            self.obj_buf[:, 13:16] = self.object_semantics          # mass, μ, scale
+
+            self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
+
         elif mode == 'fspc':
             contacts = 48
             if self.asymmetric_obs:
@@ -2046,7 +2194,12 @@ class AllegroArmMOAR(VecTask):
                         self.gym.set_actor_rigid_shape_properties(self.envs[env_id], obj, object_props)
                 else:
                     self.gym.set_actor_rigid_shape_properties(self.envs[env_id], self.objects[env_id], object_props)
-
+            
+            total_mass = sum(p.mass for p in prop)
+            self.object_semantics[env_id, 0] = total_mass
+            self.object_semantics[env_id, 1] = ( rand_friction - 0.5 * (self.friction_min + self.friction_max) ) / (0.5 * (self.friction_max - self.friction_min))
+            obj_scale = self.gym.get_actor_scale(env, handle)
+            self.object_semantics[env_id, 2] = ( obj_scale - 0.5 * (self.scale_min + self.scale_max) ) / (0.5 * (self.scale_max - self.scale_min))
 
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_arm_hand_dofs * 2 + 5), device=self.device)
 
@@ -2409,7 +2562,7 @@ def compute_hand_reward_finger(
         reward = torch.where(goal_dist >= fall_dist, reward + fall_penalty, reward)
         resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
 
-    if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr" or object_set_id == "custom" or object_set_id == "working":
+    if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr" or object_set_id == "custom":
         pass
     elif object_set_id == "cross" or object_set_id in ["cross3", "cross5", "cross_t", "cross_y"]:
         resets = torch.where(angle_difference > 0.2 * 3.1415926, torch.ones_like(reset_buf), resets)
