@@ -15,11 +15,11 @@ class PointNet(nn.Module):  # actually pointnet
         print(f'PointNetSmall')
 
         in_channel = point_channel
-        mlp_out_dim = 256
+        # mlp_out_dim = 256
         self.local_mlp = nn.Sequential(
             nn.Linear(in_channel, 64),
             nn.GELU(),
-            nn.Linear(64, mlp_out_dim),
+            nn.Linear(64, output_dim),
         )
         self.reset_parameters_()
         self.frame_count = 0
