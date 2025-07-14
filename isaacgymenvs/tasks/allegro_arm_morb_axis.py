@@ -907,9 +907,9 @@ class AllegroArmMOAR(VecTask):
                 self.object_pc_buf[i].copy_(pc_local)
             # randomize initial quat
             if self.object_set_id == "cross" or self.object_set_id == "custom" or (self.object_set_id == "working" and select_obj != "powerdrill" and select_obj != "bleach_cleanser"): 
-                angles = [-np.pi/2 , -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi/2]
-                init_theta = random.choice(angles)
-                # init_theta = random.uniform(-np.pi / 2, np.pi / 2)
+                # angles = [-np.pi/2 , -np.pi*3 / 4, -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi*3 / 4, np.pi/2]
+                # init_theta = random.choice(angles)
+                init_theta = random.uniform(-np.pi / 2, np.pi / 2)
 
                 # init_theta = np.pi / 4
                 # object_start_pose.r = gymapi.Quat(0, 0, np.cos(init_theta * 0.5), np.sin(init_theta * 0.5))
@@ -2488,6 +2488,32 @@ class AllegroArmMOAR(VecTask):
 #####################################################################
 
 @torch.jit.script
+def body_axis_world_z(q_tgt: torch.Tensor, axis_body: torch.Tensor) -> torch.Tensor:
+    """
+    Args
+    ----
+    q_tgt      : (B, 4) quaternion(s) of the target pose, XYZW order.
+    axis_body  : (B, 3) or (3,) unit vector(s) in the object’s body frame
+                 whose world-frame Z component you want.
+
+    Returns
+    -------
+    z_world    : (B,)  —  the Z value of `axis_body` expressed in world
+                 coordinates for every element in the batch.
+    """
+    # Make axis_body shape compatible with batch size B
+    if axis_body.dim() == 1:                       # (3,)  → expand to (B,3)
+        axis_body = axis_body.unsqueeze(0).repeat(q_tgt.size(0), 1)
+
+    # Body → world rotation of the target pose
+    R_tgt = transform.quaternion_to_matrix(xyzw_to_wxyz(q_tgt))   # (B,3,3)
+
+    # Axis in world frame
+    axis_w = torch.bmm(R_tgt, axis_body.unsqueeze(-1)).squeeze(-1)  # (B,3)
+
+    return axis_w[:, 2]   # world-frame Z component
+
+@torch.jit.script
 def compute_hand_reward_finger(
     spin_coef, aux_coef, main_coef, vel_coef, torque_coef, work_coef, contact_coef, finger_coef,
     rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes,
@@ -2546,7 +2572,6 @@ def compute_hand_reward_finger(
     reward = spin_reward + vel_reward + contact_reward + distance_reward + \
              torque_penalty * torque_coef + work_penalty * work_coef + \
              action_penalty * action_penalty_scale + control_error * control_penalty_scale  
-
     # Find out which envs hit the goal and update successes count
     goal_resets = torch.where(torch.abs(rot_dist) > 100.0, torch.ones_like(reset_goal_buf), reset_goal_buf)
 
@@ -2575,6 +2600,11 @@ def compute_hand_reward_finger(
         pass
     else:
         resets = torch.where(deviation < 0, torch.ones_like(reset_buf), resets)
+
+    if object_set_id == "working":
+        axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
+        z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
+        resets = torch.where(z_val > 0.45 , torch.ones_like(reset_buf), resets)
 
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_corand_floatsnsecutive_successes > 0
