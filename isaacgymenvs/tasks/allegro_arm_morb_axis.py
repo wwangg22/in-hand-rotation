@@ -470,6 +470,7 @@ class AllegroArmMOAR(VecTask):
                 dtype=torch.float32,
                 device="cuda:0" #hardcoded
         )
+        self.assets_buf = []
 
         self.friction_min = 0.0
         self.friction_max = 3.0
@@ -704,7 +705,8 @@ class AllegroArmMOAR(VecTask):
 
         if "asset" in self.cfg["env"]:
             asset_root = self.cfg["env"]["asset"].get("assetRoot", asset_root)
-
+        
+        self.asset_root = asset_root
         # load arm and hand.
         asset_options = gymapi.AssetOptions()
         asset_options.flip_visual_attachments = False
@@ -884,14 +886,14 @@ class AllegroArmMOAR(VecTask):
             obj_class_indice = np.random.randint(0, len(self.used_training_objects), 1)[0]
             select_obj = self.used_training_objects[obj_class_indice]
             if self.object_set_id == "working":
+                self.assets_buf.append(select_obj)
                 asset_path = os.path.join(asset_root,
                               "urdf/objects/meshes/custom",
                               select_obj, "textured.obj")
 
                 # 4.a  load / cache vertices  ------------------------------
-                if asset_path not in self.mesh_cache:
-                    verts_cpu = self.mesh_sampler(asset_path)     # (V,3)  CPU
-                    self.mesh_cache[asset_path] = verts_cpu.to(self.device)
+                verts_cpu = self.mesh_sampler(asset_path)     # (V,3)  CPU
+                self.mesh_cache[asset_path] = verts_cpu.to(self.device)
                 verts = self.mesh_cache[asset_path]               # GPU
 
                 # 4.b  random subsample  -------------------------------
@@ -907,9 +909,9 @@ class AllegroArmMOAR(VecTask):
                 self.object_pc_buf[i].copy_(pc_local)
             # randomize initial quat
             if self.object_set_id == "cross" or self.object_set_id == "custom" or (self.object_set_id == "working" and select_obj != "powerdrill" and select_obj != "bleach_cleanser"): 
-                # angles = [-np.pi/2 , -np.pi*3 / 4, -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi*3 / 4, np.pi/2]
-                # init_theta = random.choice(angles)
-                init_theta = random.uniform(-np.pi / 2, np.pi / 2)
+                angles = [-np.pi/2 , -np.pi*3 / 4, -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi*3 / 4, np.pi/2]
+                init_theta = random.choice(angles)
+                # init_theta = random.uniform(-np.pi / 2, np.pi / 2)
 
                 # init_theta = np.pi / 4
                 # object_start_pose.r = gymapi.Quat(0, 0, np.cos(init_theta * 0.5), np.sin(init_theta * 0.5))
@@ -2202,6 +2204,28 @@ class AllegroArmMOAR(VecTask):
             self.object_semantics[env_id, 1] = ( rand_friction - 0.5 * (self.friction_min + self.friction_max) ) / (0.5 * (self.friction_max - self.friction_min))
             obj_scale = self.gym.get_actor_scale(env, handle)
             self.object_semantics[env_id, 2] = ( obj_scale - 0.5 * (self.scale_min + self.scale_max) ) / (0.5 * (self.scale_max - self.scale_min))
+            
+            if self.object_set_id == "working":
+                asset_path = os.path.join(self.asset_root,
+                              "urdf/objects/meshes/custom",
+                              self.assets_buf[env_id], "textured.obj")
+
+                # 4.a  load / cache vertices  ------------------------------
+                verts_cpu = self.mesh_sampler(asset_path)     # (V,3)  CPU
+                self.mesh_cache[asset_path] = verts_cpu.to(self.device)
+                verts = self.mesh_cache[asset_path]               # GPU
+
+                # 4.b  random subsample  -------------------------------
+                n_verts = verts.shape[0]
+                if n_verts >= self.pc_num_points:
+                    idx = torch.randperm(n_verts, device=self.device)[:self.pc_num_points]
+                else:                                             # sample-with-replacement
+                    idx = torch.randint(0, n_verts,
+                                        (self.pc_num_points,), device=self.device)
+                pc_local = verts[idx]      # (N,3)  still on GPU
+
+                # 4.c  copy into the big buffer  -------------------------
+                self.object_pc_buf[env_id].copy_(pc_local)
 
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_arm_hand_dofs * 2 + 5), device=self.device)
 
