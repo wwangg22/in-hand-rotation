@@ -57,12 +57,22 @@ class EpisodeDataset:
     def __len__(self): return len(self.episodes)
 
     def _sample_one_episode(self, frames):
+        # pool = [e for e in self.episodes
+        #         if (e[2] - e[1] + 1) >= frames]
+        # if not pool:
+        #     raise ValueError(f"No episode ≥{frames} frames")
+        # cid, s, e = random.choice(pool)
+        # idxs = torch.randperm(e - s + 1)[:frames] + s
+        # return cid, idxs
         pool = [e for e in self.episodes
-                if (e[2] - e[1] + 1) >= frames]
+            if (e[2] - e[1] + 1) >= frames]
         if not pool:
             raise ValueError(f"No episode ≥{frames} frames")
-        cid, s, e = random.choice(pool)
-        idxs = torch.randperm(e - s + 1)[:frames] + s
+
+        cid, s, e = random.choice(pool)     # episode bounds in that chunk
+        ep_len   = e - s + 1
+        start    = random.randint(0, ep_len - frames)   # window start
+        idxs     = torch.arange(start, start + frames) + s   # consecutive
         return cid, idxs
 
     def _load_chunk(self, cid):
@@ -136,43 +146,36 @@ def main(cfg):
         num_feat_per_step = 1              # you hard-coded this
     ).to(device)
 
-    criterion = nn.MSELoss()
-    optimiser = optim.AdamW(model.parameters(), lr=cfg.lr)
+    state_dict = torch.load("./checkpoint_0050.pt", map_location=device)
+
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()  # no training, just inference
 
     # ❸ training loop ----------------------------------------------------
     t0 = time.time()
-    for step in range(1, cfg.steps + 1):
+    with torch.no_grad():
+        for step in range(1, cfg.steps + 1):
 
-        batch = ds.sample(cfg.batch, cfg.frames)
-        # shapes: (B, F, …)
-        obs_low  = _preproc_obs(batch['obs'].to(device))          # (B, F, 356)
-        pc       = batch['pointcloud'].to(device)    # (B, F, 808, 6)
-        target   = batch['pc_embedding'].to(device)  # (B, F, sem_dim)
+            batch = ds.sample(cfg.batch, cfg.frames)
+            # shapes: (B, F, …)
+            obs_low  = _preproc_obs(batch['obs'].to(device))          # (B, F, 356)
+            pc       = batch['pointcloud'].to(device)    # (B, F, 808, 6)
+            target   = batch['pc_embedding'].to(device)  # (B, F, sem_dim)
 
-        # print("mean value in pc : ", pc.mean().item())
+            print('mean value in obs_low : ', obs_low.mean().item())
 
-        target = target.mean(dim=1)  # (B, sem_dim)
-        # print("mean value in target: ", target.mean().item())
-        preds = model({'obs': obs_low, 'point_cloud': pc})
-        preds = preds.mean(dim=1)  # (B, sem_dim)
-        loss  = criterion(preds, target)
-        # print("mean value in preds: ", preds.mean().item())
+            print("mean value in pc : ", pc.mean().item())
 
-        optimiser.zero_grad(set_to_none=True)
-        loss.backward()
-        optimiser.step()
+            target = target.mean(dim=1)  # (B, sem_dim)
+            print("mean value in target: ", target.mean().item())
+            preds = model({'obs': obs_low, 'point_cloud': pc})
+            preds = preds.mean(dim=1)  # (B, sem_dim)
+            loss = (preds - target).abs().mean()
+            print("mean value in preds: ", preds.mean().item())
 
-        if step % cfg.log == 0 or step == 1:
-            dt = time.time() - t0
-            print(f"[{step:>6}/{cfg.steps}] "
-                  f"loss={loss.item():.5f}   "
-                  f"fps={(cfg.batch * cfg.frames) / dt:,.0f}")
-            t0 = time.time()
-            torch.save(model.state_dict(), f"checkpoint_{step:04d}.pt")
-            print(f"saving checkpoint: weights saved to checkpoint_{step:04d}.pt")
 
-    torch.save(model.state_dict(), cfg.out)
-    print("✓ finished; weights saved to", cfg.out)
+
+            print(f"loss={loss.item():.5f}   ")
 
 # -------------------------------------------------------------------------
 if __name__ == "__main__":

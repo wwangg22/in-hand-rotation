@@ -227,7 +227,7 @@ class DistillCollector:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.is_testing = is_testing
-        self.current_learning_iteration = 0
+        self.current_learning_iteration = 5
 
         self.apply_reset = apply_reset
         self.teacher_resume = teacher_resume
@@ -390,6 +390,14 @@ class DistillCollector:
                     # storage['sigmas'].extend(teacher_sigmas)
                     # storage['pointcloud'].extend(current_obs['obs']['pointcloud'])
                     # storage['pc_embedding'].extend(teacher_embedding)
+
+
+
+                    #print the difference between teacher prioperception and student prior perception
+
+                    # print("difference in teacher and student prioperception: ", (current_obs['obs']['obs'][:, 6:22] - current_obs['obs']['student_obs'][:, 6:22]).mean().item())
+                    # print("difference in teacher and student prioperception (pt2): ", (current_obs['obs']['obs'][:, 29:45] - current_obs['obs']['student_obs'][:, 29:45]).mean().item())
+                    # print("difference in teacher and student binary contacts: ", (current_obs['obs']['obs'][:, 45:61] - current_obs['obs']['student_obs'][:, 45:61]).mean().item())
                     for env_i in range(self.vec_env.env.num_envs):
                         storage['obs']        .append(current_obs['obs']['student_obs'][env_i])
                         storage['actions']    .append(teacher_mus[env_i])

@@ -729,6 +729,7 @@ class VecTask(Env):
 
     def fetch_camera_observations(self, imagined_pc=None, fsr_pc=None):
         if self.use_pc or self.use_depth or self.use_rgb:
+            # print("Fetching camera observations...")
             self.gym.step_graphics(self.sim)
             self.gym.render_all_camera_sensors(self.sim)
             self.gym.start_access_image_tensors(self.sim)

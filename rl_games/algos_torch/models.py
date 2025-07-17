@@ -361,9 +361,12 @@ class ModelA2CContinuousLogStd(BaseModel):
             prev_actions = input_dict.get('prev_actions', None)
 
             if isinstance(input_dict['obs'], dict):
+                input_dict['obs']['unnorm_obs'] = input_dict['obs']['obs']
                 input_dict['obs']['obs'] = self.norm_obs(input_dict['obs']['obs'])
+
             else:
                 input_dict['obs'] = self.norm_obs(input_dict['obs'])
+            # print('input dict keys :', input_dict['obs'].keys())
            
             mu, logstd, value, states, pc_embedding = self.a2c_network(input_dict)
             # mu, logstd, value, states = self.a2c_network(input_dict)

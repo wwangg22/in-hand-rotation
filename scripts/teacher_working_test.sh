@@ -7,7 +7,7 @@ EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
 CUDA_VISIBLE_DEVICES=${GPUS} \
 python ./isaacgymenvs/train.py headless=False \
 task.env.objSet=working task=AllegroArmMOAR task.env.axis=z \
-task.env.numEnvs=50 train.params.config.minibatch_size=1 \
+task.env.numEnvs=5 train.params.config.minibatch_size=1 \
 train.params.config.central_value_config.minibatch_size=1 \
 task.env.observationType=full_stack_obj_sem task.env.legacy_obs=False \
 test=True \

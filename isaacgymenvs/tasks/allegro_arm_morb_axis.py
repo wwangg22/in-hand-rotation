@@ -2439,10 +2439,10 @@ class AllegroArmMOAR(VecTask):
 
         self.compute_reward(self.actions)
 
-        if not self.cfg["env"]["legacy_obs"] and self.object_set_id != "working":
+        if not self.cfg["env"]["legacy_obs"]:
             if self.cfg["env"]["pc_mode"] == "cam":
                 self.fetch_camera_observations()
-            elif self.cfg["env"]["pc_mode"] == "label":
+            elif self.cfg["env"]["pc_mode"] == "label" :
                 imagined_mesh, fsr_pc = self.fetch_imagined_pointcloud()
                 self.fetch_camera_observations(imagined_mesh, fsr_pc)
             else:

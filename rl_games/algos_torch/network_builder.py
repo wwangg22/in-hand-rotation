@@ -213,23 +213,23 @@ class A2CBuilder(NetworkBuilder):
                 )
                 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
 
-                state_dict = torch.load("./semantics.pt", map_location="cuda:0")
+                state_dict = torch.load("checkpoint_0150.pt", map_location="cuda")
                 self.transformer = ObjectSemanticsTransformer(
                     repr_dim = DEFAULTS['repr_dim'],
                     act_dim  = DEFAULTS['sem_dim'],
                     hidden_dim = DEFAULTS['hidden_dim'],
                     num_feat_per_step = 1              # you hard-coded this
-                ).to("cuda:0")
+                ).to("cuda")
 
                 self.transformer.load_state_dict(state_dict, strict=True)
 
                 print("transformer in!")
-                self.transformer
-                num_envs = 50
+                self.transformer.eval()
+                num_envs = 5
                 length = DEFAULTS['frames_per_ep']
-                self.pc_buffer = torch.zeros((num_envs, length, 808, 6), dtype=torch.float32, device="cuda:0")
+                self.pc_buffer = torch.zeros((num_envs, length, 808, 6), dtype=torch.float, device="cuda")
 
-                self.obs_buffer = torch.zeros((num_envs, length, input_shape[0]-32), dtype=torch.float32, device="cuda:0")
+                self.obs_buffer = torch.zeros((num_envs, length, input_shape[0]-32), dtype=torch.float, device="cuda")
 
 
             if self.has_cnn:
@@ -340,9 +340,13 @@ class A2CBuilder(NetworkBuilder):
 
                 self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
                 self.pc_buffer[:, -1] = obs_dict['obs']['pointcloud']
+                print('shape of obs_dict pc' , obs_dict['obs']['pointcloud'].shape)
+                # print('mean value in point cloud : ' , self.pc_buffer.mean().item())
 
                 self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
-                self.obs_buffer[:, -1] = obs_dict['obs']['obs']
+                self.obs_buffer[:, -1] = obs_dict['obs']['unnorm_obs']
+
+                print("mean value in obs : ", self.obs_buffer.mean().item())
 
                 trans_obs = {
                     'obs': self.obs_buffer,
@@ -359,7 +363,7 @@ class A2CBuilder(NetworkBuilder):
                 #     pc_embedding, device=pc_embedding.device, dtype=torch.float32
                 # ).uniform_(-1.0, 1.0) #ablation test
                 # print(pc_embedding.shape)
-                obs = torch.cat([obs, pc_embedding_ac], dim=-1)
+                obs = torch.cat([obs, pc_embedding], dim=-1)
             else:
                 obs = obs_dict['obs']
                 pc_embedding = None
