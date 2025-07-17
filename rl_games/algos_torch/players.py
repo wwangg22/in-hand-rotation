@@ -102,7 +102,7 @@ class PpoPlayerContinuous(BasePlayer):
     def restore(self, fn):
         checkpoint = torch_ext.load_checkpoint(fn)
         print("Loading checkpoint")
-        self.model.load_state_dict(checkpoint['model'])
+        self.model.load_state_dict(checkpoint['model'], strict=False) #strict = false so i can load transformer seperately
         print("check", checkpoint['model'].keys())
         if self.normalize_input: 
             print("Loaded")
@@ -159,7 +159,7 @@ class PpoPlayerContinuous(BasePlayer):
         env_reward = np.zeros(16)
         end_flag = False
 
-        n_object_dict = {'custom': 2, 'working': 19,'C': 16, 27: 27, 'poly': 162, 'non-convex': 40, 'cuboid': 1, 'cross': 5, 'ball': 1, 'block': 1, 'asymmetry': 172, 'duck': 1, 'giraffe': 1, 'symmetry': 1, 'designer-cube': 1, "cross_bmr": 1, "cross5": 1, "designer-cube2": 1, "cross_y": 1, "cross3": 1, "cross_t": 1, "designer-cube3": 1,
+        n_object_dict = {'custom': 2, 'working': 25,'C': 16, 27: 27, 'poly': 162, 'non-convex': 40, 'cuboid': 1, 'cross': 5, 'ball': 1, 'block': 1, 'asymmetry': 172, 'duck': 1, 'giraffe': 1, 'symmetry': 1, 'designer-cube': 1, "cross_bmr": 1, "cross5": 1, "designer-cube2": 1, "cross_y": 1, "cross3": 1, "cross_t": 1, "designer-cube3": 1,
                             'i': 1, 'c': 1, 'r': 1, 'a': 1, 'mouse': 1, 0: 1}
         n_object = n_object_dict[self.env.cfg['env']['objSet']]
         object_count_dict = {'game_count': np.zeros(n_object), 'reward_sum': np.zeros(n_object), 'step_sum': np.zeros(n_object)}

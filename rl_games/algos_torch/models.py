@@ -365,7 +365,8 @@ class ModelA2CContinuousLogStd(BaseModel):
             else:
                 input_dict['obs'] = self.norm_obs(input_dict['obs'])
            
-            mu, logstd, value, states = self.a2c_network(input_dict)
+            mu, logstd, value, states, pc_embedding = self.a2c_network(input_dict)
+            # mu, logstd, value, states = self.a2c_network(input_dict)
             
             sigma = torch.exp(logstd)
             distr = torch.distributions.Normal(mu, sigma)
@@ -379,7 +380,8 @@ class ModelA2CContinuousLogStd(BaseModel):
                     'entropy': entropy,
                     'rnn_states': states,
                     'mus': mu,
-                    'sigmas': sigma
+                    'sigmas': sigma,
+                    'pc_embedding': pc_embedding
                 }
                 return result
             else:
@@ -392,7 +394,8 @@ class ModelA2CContinuousLogStd(BaseModel):
                     'actions': selected_action,
                     'rnn_states': states,
                     'mus': mu,
-                    'sigmas': sigma
+                    'sigmas': sigma,
+                    'pc_embedding': pc_embedding
                 }
                 return result
 

@@ -301,6 +301,7 @@ class VecTask(Env):
             self.use_depth = use_depth
             self.use_rgb = use_rgb
             self.use_pc = use_pc
+            self.use_pc = True
 
             # Modify env observation space
             if use_camera:
@@ -490,7 +491,8 @@ class VecTask(Env):
             self.obs_dict["obs"] = torch.clamp(self.obs_storage, -self.clip_obs, self.clip_obs).to(self.rl_device)
         
         if self.object_set_id == "working":
-            self.obs_dict['obs']["pointcloud"] = self.object_pc_buf.to(self.rl_device)
+            # self.obs_dict['obs']["pointcloud"] = self.object_pc_buf.to(self.rl_device)
+            self.obs_dict['obs']['test'] = self.object_pc_buf.to(self.rl_device)
 
         # asymmetric actor-critic
         if self.num_states > 0:
@@ -543,7 +545,8 @@ class VecTask(Env):
         else:
             self.obs_dict["obs"] = torch.clamp(self.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
         if self.object_set_id == "working":
-            self.obs_dict['obs']["pointcloud"] = torch.zeros_like(self.object_pc_buf, device=self.device, dtype=torch.float)
+            # self.obs_dict['obs']["pointcloud"] = torch.zeros_like(self.object_pc_buf, device=self.device, dtype=torch.float)
+            self.obs_dict['obs']["test"] = torch.zeros_like(self.object_pc_buf, device=self.device, dtype=torch.float)
         # asymmetric actor-critic
         if self.num_states > 0:
             self.obs_dict["states"] = self.get_state()

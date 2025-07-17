@@ -279,7 +279,7 @@ class AllegroArmMOAR(VecTask):
                   'set_obj10_thin_block_corner', 'set_obj11_cylinder', 'set_obj12_cylinder_corner',
                   'set_obj13_irregular_block', 'set_obj14_irregular_block_cross', 'set_obj15_irregular_block_time',
                   'set_obj16_cylinder_axis'],
-            "custom": ["custom_obj1_cylinder",   "repellent"], #"cup", "screwdriver", "powerdrill", "hammer"],
+            "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
             "working":["black_marker", "stapler_2", "blue_cup", 
                 "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", 
                 "conditioner", "correction_fluid", "bowl", "scissors", "mug","fork",
@@ -2621,7 +2621,7 @@ def compute_hand_reward_finger(
     else:
         resets = torch.where(angle_difference > 0.4 * 3.1415926, torch.ones_like(reset_buf), resets)
     
-    if object_set_id == "ball" or object_set_id == "working":
+    if object_set_id == "ball" or object_set_id == "working" or object_set_id == "custom":
         pass
     else:
         resets = torch.where(deviation < 0, torch.ones_like(reset_buf), resets)
@@ -2629,7 +2629,7 @@ def compute_hand_reward_finger(
     if object_set_id == "working":
         axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
         z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
-        resets = torch.where(z_val > 0.45 , torch.ones_like(reset_buf), resets)
+        resets = torch.where(z_val > 0.5 , torch.ones_like(reset_buf), resets)
 
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_corand_floatsnsecutive_successes > 0

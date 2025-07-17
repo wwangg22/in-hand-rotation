@@ -143,7 +143,10 @@ class DistillCollector:
         self.teacher_builder = model_builder.ModelBuilder()
         self.teacher_network = self.teacher_builder.load(teacher_params)
         if isinstance(self.obs_shape, dict):
-            self.teacher_obs_shape = self.obs_shape['obs']
+            # self.teacher_obs_shape = self.obs_shape['obs']
+            self.teacher_obs_shape = self.obs_shape
+            # print("Teacher observation shape:", self.teacher_obs_shape)
+
         else:
             self.teacher_obs_shape = self.obs_shape
         # print("Teacher observation shape:", self.teacher_obs_shape)
@@ -236,7 +239,7 @@ class DistillCollector:
 
     def teacher_load(self, path):
         checkpoint = torch_ext.load_checkpoint(path)
-        self.teacher_actor_critic.load_state_dict(checkpoint['model'])
+        self.teacher_actor_critic.load_state_dict(checkpoint['model'], strict=False)
         self.set_stats_weights(self.teacher_actor_critic, checkpoint)
         env_state = checkpoint.get('env_state', None)
         if self.vec_env is not None:
@@ -295,6 +298,13 @@ class DistillCollector:
             'obs': processed_obs,
             'rnn_states': self.rnn_states
         }
+        if "pointcloud" in obs.keys():
+            input_dict = {
+            'is_train': False,
+            'prev_actions': None,
+            'obs': {'obs': processed_obs, 'pointcloud': obs['pointcloud'], 'test': obs['test']},
+            'rnn_states': self.rnn_states
+        }
 
         with torch.no_grad():
             res_dict = model(input_dict)
@@ -328,6 +338,7 @@ class DistillCollector:
     def run(self, num_learning_iterations, log_interval=1):
         current_obs = self.vec_env.reset()
         current_states = self.vec_env.env.get_state()
+        dones = torch.zeros(self.vec_env.env.num_envs, dtype=torch.float, device=self.device)
 
         self.teacher_load(
             "{}/{}.pth".format(self.teacher_log_dir, self.teacher_resume))
@@ -343,7 +354,8 @@ class DistillCollector:
             # report_gpu()
             ep_infos = []
 
-            storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': []}  # , 'pointcloud': []}
+            storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [],
+                       'pc_embedding': [], 'done': [], 'env_id': []}  # , 'pointcloud': []}
 
             # Rollout
             for i in range(self.num_transitions_per_env):
@@ -352,21 +364,40 @@ class DistillCollector:
                 if self.apply_reset:
                     current_obs = self.vec_env.reset()
                     current_states = self.vec_env.get_state()
+                    dones = torch.zeros(self.vec_env.env.num_envs, dtype=torch.float, device=self.device)
                 
                 teacher_obs = current_obs.copy()
                 teacher_obs["obs"] = current_obs["obs"]["obs"] 
-                
+                teacher_obs["pointcloud"] = current_obs["obs"]["pointcloud"]
+                teacher_obs['test'] = current_obs['obs']['test']
+
+                # print("obs shape pc : ", current_obs['obs']['pointcloud'].shape)
+                # print("teacher obs pc shape: ", teacher_obs['pointcloud'].shape)
+
+                # print("teacher_obs['obs'].shape, teacher_obs['pointcloud'].shape", teacher_obs['obs'].shape, teacher_obs['pointcloud'].shape)
+
                 # Compute the action
                 with torch.no_grad():
                     res_dict = self.get_action_values(self.teacher_actor_critic, teacher_obs, mode='teacher')
                     teacher_actions = res_dict['actions']
                     teacher_mus = res_dict['mus']
                     teacher_sigmas = res_dict['sigmas']
+                    teacher_embedding = res_dict['pc_embedding']
+                    # print('mean value in teacher embedding: ', teacher_embedding.mean().item())
 
-                    storage['obs'].extend(current_obs['obs']['student_obs'])
-                    storage['actions'].extend(teacher_mus)
-                    storage['sigmas'].extend(teacher_sigmas)
-                    storage['pointcloud'].extend(current_obs['obs']['pointcloud'])
+                    # storage['obs'].extend(current_obs['obs']['student_obs'])
+                    # storage['actions'].extend(teacher_mus)
+                    # storage['sigmas'].extend(teacher_sigmas)
+                    # storage['pointcloud'].extend(current_obs['obs']['pointcloud'])
+                    # storage['pc_embedding'].extend(teacher_embedding)
+                    for env_i in range(self.vec_env.env.num_envs):
+                        storage['obs']        .append(current_obs['obs']['student_obs'][env_i])
+                        storage['actions']    .append(teacher_mus[env_i])
+                        storage['sigmas']     .append(teacher_sigmas[env_i])
+                        storage['pointcloud'] .append(current_obs['obs']['pointcloud'][env_i])
+                        storage['pc_embedding'].append(teacher_embedding[env_i])
+                        storage['done']       .append(dones[env_i].clone())
+                        storage['env_id']     .append(torch.tensor(env_i, dtype=torch.long, device=self.device))    
 
                     next_obs, rews, dones, infos = self.vec_env.step(torch.clamp(teacher_actions, -1.0, 1.0))
                     next_states = self.vec_env.env.get_state()
@@ -393,7 +424,7 @@ class DistillCollector:
                         storage[key] = torch.stack(storage[key], dim=0)
                         print(storage[key].shape)
                     save_dir = os.path.join(self.teacher_data_dir, "teacher_batch_{}_{}_{}.pt".format(self.worker_id, it, int((i-199)/200)))
-                    torch.save((storage['obs'], storage['actions'], storage['sigmas'], storage['pointcloud']), save_dir)  
-                    storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': []} 
+                    torch.save((storage['obs'], storage['actions'], storage['sigmas'], storage['pointcloud'], storage['pc_embedding'], storage['done'], storage['env_id']), save_dir)  
+                    storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [], 'pc_embedding': [], 'done': [], 'env_id': []}  # , 'pointcloud': []
                     reward_sum = []
                     episode_length = []

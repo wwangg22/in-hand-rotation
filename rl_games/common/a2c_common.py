@@ -179,7 +179,7 @@ class A2CBase(BaseAlgorithm):
 				self.obs_shape[k] = v.shape
 		else:
 			self.obs_shape = self.observation_space.shape
-
+		
 		self.critic_coef = config['critic_coef']
 		self.grad_norm = config['grad_norm']
 		self.gamma = self.config['gamma']
@@ -1176,7 +1176,7 @@ class ContinuousA2CBase(A2CBase):
 		total_time = update_time_end - play_time_start
 
 		return batch_dict['step_time'], play_time, update_time, total_time, a_losses, c_losses, b_losses, entropies, kls, last_lr, lr_mul
-
+ 
 	def prepare_dataset(self, batch_dict):
 		obses = batch_dict['obses']
 		returns = batch_dict['returns']

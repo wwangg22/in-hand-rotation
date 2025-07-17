@@ -14,7 +14,6 @@ from rl_games.common.layers.recurrent import  GRUWithDones, LSTMWithDones
 
 from rl_games.algos_torch.pointnets import PointNet, PointNetMedium, PointNetLarge
 
-
 def _create_initializer(func, **kwargs):
     return lambda v : func(v, **kwargs)
 
@@ -192,6 +191,7 @@ class A2CBuilder(NetworkBuilder):
             if isinstance(input_shape, dict):
                 #print(params.keys())
                 input_shape = (input_shape['obs'][0] + 32,)
+                print(f'input_shape: {input_shape}')
                 #if params.pointnet == "medium":
                 #    self.pc_encoder = PointNetMedium(point_channel=5)
                 #elif params.pointnet == "large":
@@ -199,6 +199,38 @@ class A2CBuilder(NetworkBuilder):
                 #else:
                 print("Creating PointNet with point_channel=3")
                 self.pc_encoder = PointNet(point_channel=3, output_dim=32) #6)
+                
+                #test trasnformer
+                DEFAULTS = dict(
+                    hidden_dim      = 80,      # transformer inner size
+                    repr_dim        = 80,       # point-cloud embedding size
+                    sem_dim         = 32,       # pc_embedding target size (= act_dim)
+                    lr              = 1e-4,
+                    steps           = 20_000,   # optimisation steps, not epochs
+                    batch_size      = 256,       # episodes per update
+                    frames_per_ep   = 12,        # timesteps sampled per episode
+                    log_every       = 25,
+                )
+                from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
+
+                state_dict = torch.load("./semantics.pt", map_location="cuda:0")
+                self.transformer = ObjectSemanticsTransformer(
+                    repr_dim = DEFAULTS['repr_dim'],
+                    act_dim  = DEFAULTS['sem_dim'],
+                    hidden_dim = DEFAULTS['hidden_dim'],
+                    num_feat_per_step = 1              # you hard-coded this
+                ).to("cuda:0")
+
+                self.transformer.load_state_dict(state_dict, strict=True)
+
+                print("transformer in!")
+                self.transformer
+                num_envs = 50
+                length = DEFAULTS['frames_per_ep']
+                self.pc_buffer = torch.zeros((num_envs, length, 808, 6), dtype=torch.float32, device="cuda:0")
+
+                self.obs_buffer = torch.zeros((num_envs, length, input_shape[0]-32), dtype=torch.float32, device="cuda:0")
+
 
             if self.has_cnn:
                 if self.permute_input:
@@ -304,11 +336,33 @@ class A2CBuilder(NetworkBuilder):
             if isinstance(obs_dict['obs'], dict):
                 obs = obs_dict['obs']['obs']
                 # print(obs.shape, obs_dict['obs']['pointcloud'].shape)
-                pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['pointcloud'])
+                pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['test'])
+
+                self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
+                self.pc_buffer[:, -1] = obs_dict['obs']['pointcloud']
+
+                self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
+                self.obs_buffer[:, -1] = obs_dict['obs']['obs']
+
+                trans_obs = {
+                    'obs': self.obs_buffer,
+                    'point_cloud': self.pc_buffer
+                }
+
+                with torch.no_grad():
+                    pc_embedding_ac = self.transformer(trans_obs).mean(dim=1)
+
+                print("diff in pc_embedding: ", torch.abs(pc_embedding - pc_embedding_ac).mean().item())
+                print("mean value in pc_embedding: ", pc_embedding.mean().item())
+                print("mean value in ac pc_embedding: ", pc_embedding_ac.mean().item())
+                # pc_embedding = torch.empty_like(
+                #     pc_embedding, device=pc_embedding.device, dtype=torch.float32
+                # ).uniform_(-1.0, 1.0) #ablation test
                 # print(pc_embedding.shape)
-                obs = torch.cat([obs, pc_embedding], dim=-1)
+                obs = torch.cat([obs, pc_embedding_ac], dim=-1)
             else:
                 obs = obs_dict['obs']
+                pc_embedding = None
             states = obs_dict.get('rnn_states', None)
             seq_length = obs_dict.get('seq_length', 1)
             dones = obs_dict.get('dones', None)
@@ -452,7 +506,8 @@ class A2CBuilder(NetworkBuilder):
                         sigma = self.sigma_act(self.sigma)
                     else:
                         sigma = self.sigma_act(self.sigma(out))
-                    return mu, mu*0 + sigma, value, states
+                    return mu, mu*0 + sigma, value, states, pc_embedding
+                    # return mu, mu*0 + sigma, value, states
                     
         def is_separate_critic(self):
             return self.separate
@@ -819,6 +874,7 @@ class A2CResnetBuilder(NetworkBuilder):
 
     def build(self, name, **kwargs):
         net = A2CResnetBuilder.Network(self.params, **kwargs)
+        print("Built network:")
         return net
 
 
