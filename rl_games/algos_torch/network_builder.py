@@ -191,14 +191,14 @@ class A2CBuilder(NetworkBuilder):
             
             if isinstance(input_shape, dict):
                 #print(params.keys())
-                input_shape = (input_shape['obs'][0] + 32,)
+                input_shape = (input_shape['obs'][0] + 256,) #32,)
                 #if params.pointnet == "medium":
                 #    self.pc_encoder = PointNetMedium(point_channel=5)
                 #elif params.pointnet == "large":
                 #    self.pc_encoder = PointNetLarge(point_channel=5)
                 #else:
                 print("Creating PointNet with point_channel=3")
-                self.pc_encoder = PointNet(point_channel=3, output_dim=32) #6)
+                self.pc_encoder = PointNet(point_channel=6 ) # 3, output_dim=32)
 
             if self.has_cnn:
                 if self.permute_input:
