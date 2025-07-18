@@ -9,7 +9,7 @@ EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
 
 CUDA_VISIBLE_DEVICES=${GPUS} \
 python ./isaacgymenvs/train_distillation.py headless=True \
-distill.teacher_data_dir=demonstration-working-eval \
+distill.teacher_data_dir=demonstration-working \
 task.env.legacy_obs=False distill.bc_training=collect \
 task.env.objSet=working task.env.is_distillation=True \
 train.params.config.user_prefix=bc-working-collect task=AllegroArmMOAR \

@@ -227,7 +227,7 @@ class DistillCollector:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.is_testing = is_testing
-        self.current_learning_iteration = 5
+        self.current_learning_iteration = 12
 
         self.apply_reset = apply_reset
         self.teacher_resume = teacher_resume

@@ -102,7 +102,7 @@ DEFAULTS = dict(
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
     lr              = 1e-4,
     steps           = 400,   # optimisation steps, not epochs
-    batch_size      = 256,       # episodes per update
+    batch_size      = 32,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
     log_every       = 50,
 )

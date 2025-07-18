@@ -146,7 +146,7 @@ def main(cfg):
         num_feat_per_step = 1              # you hard-coded this
     ).to(device)
 
-    state_dict = torch.load("./checkpoint_0050.pt", map_location=device)
+    state_dict = torch.load("./checkpoint_0150.pt", map_location=device)
 
     model.load_state_dict(state_dict, strict=True)
     model.eval()  # no training, just inference

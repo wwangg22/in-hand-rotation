@@ -213,7 +213,7 @@ class A2CBuilder(NetworkBuilder):
                 )
                 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
 
-                state_dict = torch.load("checkpoint_0150.pt", map_location="cuda")
+                state_dict = torch.load("checkpoint_0100.pt", map_location="cuda")
                 self.transformer = ObjectSemanticsTransformer(
                     repr_dim = DEFAULTS['repr_dim'],
                     act_dim  = DEFAULTS['sem_dim'],
