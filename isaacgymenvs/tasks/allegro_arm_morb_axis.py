@@ -279,13 +279,20 @@ class AllegroArmMOAR(VecTask):
                   'set_obj10_thin_block_corner', 'set_obj11_cylinder', 'set_obj12_cylinder_corner',
                   'set_obj13_irregular_block', 'set_obj14_irregular_block_cross', 'set_obj15_irregular_block_time',
                   'set_obj16_cylinder_axis'],
-            "custom": ["custom_obj1_cylinder",   "repellent"], #"cup", "screwdriver", "powerdrill", "hammer"],
-            "working":["black_marker", "stapler_2", "blue_cup", 
+            "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
+            "working":["blue_cup", 
+                "blue_moon", "blue_plate", "blue_tea_box", 
+                "conditioner", "bowl",  "mug",
+                "phillips_screwdriver", "flat_screwdriver",
+                "remote_controller_1", "repellent"],
+            "all":[
+                "black_marker", "stapler_2", "blue_cup", 
                 "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", 
                 "conditioner", "correction_fluid", "bowl", "scissors", "mug","fork",
                 "phillips_screwdriver", "flat_screwdriver", "stapler_1", "large_clamp",
                 "remote_controller_1", "knife", "two_color_hammer", "plastic_banana", "mini_claw_hammer_1", "large_marker",  
-                "toothpaste_1", "repellent"],
+                "toothpaste_1", "repellent"
+            ],
             "custom2": [ "black_marker", "bleach_cleanser", "blue_cup", 
                 "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", "book_1", "book_2", 
                 "book_3", "book_4", "book_5", "book_6", "book_holder_1", "book_holder_2", "book_holder_3", 
@@ -910,9 +917,9 @@ class AllegroArmMOAR(VecTask):
                 self.object_pc_buf[i].copy_(pc_local)
             # randomize initial quat
             if self.object_set_id == "cross" or self.object_set_id == "custom" or (self.object_set_id == "working" and select_obj != "powerdrill" and select_obj != "bleach_cleanser"): 
-                angles = [-np.pi/2 , -np.pi*3 / 4, -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi*3 / 4, np.pi/2]
-                init_theta = random.choice(angles)
-                # init_theta = random.uniform(-np.pi / 2, np.pi / 2)
+                # angles = [-np.pi/2 , -np.pi*3 / 4, -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi*3 / 4, np.pi/2]
+                # init_theta = random.choice(angles)
+                init_theta = random.uniform(-np.pi / 2, np.pi / 2)
 
                 # init_theta = np.pi / 4
                 # object_start_pose.r = gymapi.Quat(0, 0, np.cos(init_theta * 0.5), np.sin(init_theta * 0.5))
@@ -2621,15 +2628,19 @@ def compute_hand_reward_finger(
     else:
         resets = torch.where(angle_difference > 0.4 * 3.1415926, torch.ones_like(reset_buf), resets)
     
-    if object_set_id == "ball" or object_set_id == "working":
+    if object_set_id == "ball" or object_set_id == "working" or object_set_id == "custom":
         pass
     else:
         resets = torch.where(deviation < 0, torch.ones_like(reset_buf), resets)
 
-    if object_set_id == "working":
+    if object_set_id == "working" or object_set_id == "custom":
         axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
         z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
-        resets = torch.where(z_val > 0.45 , torch.ones_like(reset_buf), resets)
+        resets = torch.where(z_val > 0.5 , torch.ones_like(reset_buf), resets)
+    
+    # if object_set_id == "working":
+    #     z_reward = object_pos[:, ..., 2] - 0.22
+    #     reward = torch.where(z_reward >0 , reward + 0.10, reward) # z axis reward
 
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_corand_floatsnsecutive_successes > 0

@@ -59,9 +59,9 @@ params:
     schedule_type: standard
     kl_threshold: 0.02
     score_to_win: 100000
-    max_epochs: ${resolve_default:20100,${....max_iterations}}
-    save_best_after: 100
-    save_frequency: 100
+    max_epochs: ${resolve_default:40100,${....max_iterations}}
+    save_best_after: 500
+    save_frequency: 1000
     print_stats: True
     grad_norm: 1.0
     entropy_coef: 0.0
