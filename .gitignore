@@ -18,3 +18,7 @@ videos
 *.jpg
 *.webm
 *.mp4
+
+*.pt
+demonstration-working-eval
+demonstration-working
