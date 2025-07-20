@@ -486,6 +486,11 @@ class AllegroArmMOAR(VecTask):
         self.scale_min = 0.90 
         self.scale_max = 1.10
 
+        self.palm_center = torch.tensor([5.7225e-01, 1.0681e-04, 1.7850e-01], device="cuda:0")
+
+        self.relative_limit_x = torch.tensor([0.15, -0.04], device="cuda:0") 
+
+        self.relative_limit_y = torch.tensor([0.035, -0.035], device="cuda:0")
 
         super().__init__(config=self.cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
         self.object_class_indices_tensor = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
@@ -817,6 +822,9 @@ class AllegroArmMOAR(VecTask):
             object_start_pose.p = gymapi.Vec3()
 
             pose_dx, pose_dy, pose_dz = self.obj_init_pos_shift[self.obj_init_type]
+            # pose_dx = self.palm_center[0] + self.relative_limit_x[0]
+            # pose_dy = self.palm_center[1] + self.relative_limit_y[1]
+            # pose_dz = self.palm_center[2]
             object_start_pose.p.x = arm_hand_start_pose.p.x + pose_dx
             object_start_pose.p.y = arm_hand_start_pose.p.y + pose_dy
             object_start_pose.p.z = arm_hand_start_pose.p.z + pose_dz
@@ -2558,6 +2566,7 @@ def compute_hand_reward_finger(
 ):
     # Distance from the hand to the object
     goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
+    goal_z = torch.abs(object_pos[..., 2] - target_pos[..., 2])
 
     if ignore_z_rot:
         success_tolerance = 2.0 * success_tolerance
@@ -2617,9 +2626,14 @@ def compute_hand_reward_finger(
         reward = torch.where(goal_dist[:, 1] >= fall_dist, reward + fall_penalty, reward)
         resets = torch.where(goal_dist[:, 0] >= fall_dist, torch.ones_like(reset_buf), reset_buf)
         resets = torch.where(goal_dist[:, 1] >= fall_dist, torch.ones_like(reset_buf), resets)
+    elif object_set_id == "working":
+        reward = torch.where(goal_z >= fall_dist, reward + fall_penalty, reward)
+        resets = torch.where(goal_z >= fall_dist, torch.ones_like(reset_buf), reset_buf)
     else:
         reward = torch.where(goal_dist >= fall_dist, reward + fall_penalty, reward)
+        # resets = torch.where(goal_z >= fall_dist, torch.ones_like(reset_buf), reset_buf)
         resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
+        
 
     if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr" or object_set_id == "custom" or object_set_id == "working":
         pass
@@ -2638,9 +2652,9 @@ def compute_hand_reward_finger(
         z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
         resets = torch.where(z_val > 0.5 , torch.ones_like(reset_buf), resets)
     
-    # if object_set_id == "working":
-    #     z_reward = object_pos[:, ..., 2] - 0.22
-    #     reward = torch.where(z_reward >0 , reward + 0.10, reward) # z axis reward
+    if object_set_id == "working":
+        z_reward = object_pos[:, ..., 2] - 0.22
+        reward = torch.where(z_reward >0 , reward + 0.10, reward) # z axis reward
 
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_corand_floatsnsecutive_successes > 0

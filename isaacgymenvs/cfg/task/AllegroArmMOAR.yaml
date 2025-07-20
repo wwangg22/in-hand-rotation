@@ -95,7 +95,7 @@ env:
   actionPenaltyScale: 0.0
   controlPenaltyScale: 0.0
   reachGoalBonus: 250
-  fallDistance: 0.10
+  fallDistance: 0.065
   fallPenalty: -50.0
 
   objectType: "block" 
