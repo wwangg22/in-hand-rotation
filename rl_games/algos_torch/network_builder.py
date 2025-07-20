@@ -213,7 +213,7 @@ class A2CBuilder(NetworkBuilder):
                 )
                 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
 
-                state_dict = torch.load("checkpoint_0100.pt", map_location="cuda")
+                state_dict = torch.load("checkpoint_3200.pt", map_location="cuda")
                 self.transformer = ObjectSemanticsTransformer(
                     repr_dim = DEFAULTS['repr_dim'],
                     act_dim  = DEFAULTS['sem_dim'],
@@ -225,7 +225,7 @@ class A2CBuilder(NetworkBuilder):
 
                 print("transformer in!")
                 self.transformer.eval()
-                num_envs = 5
+                num_envs = 64
                 length = DEFAULTS['frames_per_ep']
                 self.pc_buffer = torch.zeros((num_envs, length, 808, 6), dtype=torch.float, device="cuda")
 
@@ -363,7 +363,7 @@ class A2CBuilder(NetworkBuilder):
                 #     pc_embedding, device=pc_embedding.device, dtype=torch.float32
                 # ).uniform_(-1.0, 1.0) #ablation test
                 # print(pc_embedding.shape)
-                obs = torch.cat([obs, pc_embedding], dim=-1)
+                obs = torch.cat([obs, pc_embedding_ac], dim=-1)
             else:
                 obs = obs_dict['obs']
                 pc_embedding = None

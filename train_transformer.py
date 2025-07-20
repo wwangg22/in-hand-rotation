@@ -101,10 +101,10 @@ DEFAULTS = dict(
     repr_dim        = 80,       # point-cloud embedding size
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
     lr              = 1e-4,
-    steps           = 400,   # optimisation steps, not epochs
-    batch_size      = 32,       # episodes per update
+    steps           = 4000,   # optimisation steps, not epochs
+    batch_size      = 128,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
-    log_every       = 50,
+    log_every       = 100,
 )
 def _preproc_obs( obs_batch):
     import copy
@@ -155,6 +155,8 @@ def main(cfg):
         # print("mean value in target: ", target.mean().item())
         preds = model({'obs': obs_low, 'point_cloud': pc})
         preds = preds.mean(dim=1)  # (B, sem_dim)
+        # print(preds.shape, target.shape)
+        # print("mean value in target: ", target.mean(dim=1))
         loss  = criterion(preds, target)
         # print("mean value in preds: ", preds.mean().item())
 
