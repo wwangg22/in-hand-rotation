@@ -9,7 +9,8 @@ from torchvision import transforms as T
 
 from rl_games.common.rgb_modules import BaseEncoder, ResnetEncoder, weight_init
 from rl_games.common.policy_head import (
-    DeterministicHead
+    DeterministicHead,
+    GMMHead
 )
 from rl_games.common.gpt import GPT, GPTConfig
 from rl_games.common.orderless_gpt import OrderlessGPT, OrderlessGPTConfig
@@ -127,7 +128,7 @@ class OrderlessActor(nn.Module):
         return features
 
 class ObjectSemanticsTransformer(nn.Module):
-    def __init__(self, repr_dim, act_dim, hidden_dim, num_feat_per_step=1):
+    def __init__(self, repr_dim, act_dim, hidden_dim, num_feat_per_step=1, policy_head="deterministic"):
         super().__init__()
         self._repr_dim = repr_dim + 48 # 48 is the size of the prioperception + tactile stuff
         self._act_dim = act_dim
@@ -144,10 +145,16 @@ class ObjectSemanticsTransformer(nn.Module):
             policy_head="deterministic",
             num_feat_per_step=num_feat_per_step,
         )
-
-        self.semantics_head = DeterministicHead(
-                input_size=self._hidden_dim, output_size=self._act_dim, hidden_size=self._hidden_dim, num_layers=2
-            )
+        if policy_head == "deterministic":
+            self.semantics_head = DeterministicHead(
+                    input_size=self._hidden_dim, output_size=self._act_dim, hidden_size=self._hidden_dim, num_layers=2
+                )
+        elif policy_head == "gmm":
+            self.semantics_head = GMMHead(
+                    input_size=self._hidden_dim, output_size=self._act_dim, hidden_size=self._hidden_dim, num_layers=2
+                )
+        else:
+            raise ValueError(f"Unknown policy head type: {policy_head}")
         
 
 
@@ -191,7 +198,40 @@ class ObjectSemanticsTransformer(nn.Module):
 
         features = self._transformer(features)
         pred_semantics = self.semantics_head(features)
-        return pred_semantics.loc
+        return pred_semantics
+    
+    def update(self, obs, target, optimizer=None, reduction="mean"):
+        """
+        Parameters
+        ----------
+        obs      : dict with keys 'obs' and 'point_cloud'
+        target   : tensor of target embeddings, same shape as dist.mean
+        optimizer: torch.optim.Optimizer or None  (step only if provided)
+        reduction: 'mean' | 'sum' | 'none'  (passed to head.loss_fn)
+
+        Returns
+        -------
+        dict with scalar metrics   (loss, mse) on CPU.
+        """
+        dist      = self.forward(obs)                          # Distribution
+        loss_dict = self.semantics_head.loss_fn(
+            dist, target, reduction=reduction
+        )
+        loss = loss_dict["actor_loss"]                         # scalar tensor
+
+        if optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+
+        with torch.no_grad():
+            mse = ((dist.mean - target) ** 2).mean()
+
+        return {
+            "loss_tensor": loss,            # keep for back‑prop if needed
+            "loss":        loss.item(),     # float
+            "mse":         mse.item(),      # float
+        }
 
 
 class VTActorCritic(nn.Module):

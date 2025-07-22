@@ -102,9 +102,9 @@ DEFAULTS = dict(
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
     lr              = 1e-4,
     steps           = 4000,   # optimisation steps, not epochs
-    batch_size      = 128,       # episodes per update
+    batch_size      = 16,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
-    log_every       = 100,
+    log_every       = 50,
 )
 def _preproc_obs( obs_batch):
     import copy
@@ -133,10 +133,10 @@ def main(cfg):
         repr_dim = cfg.repr_dim,
         act_dim  = cfg.sem_dim,
         hidden_dim = cfg.hidden_dim,
-        num_feat_per_step = 1              # you hard-coded this
+        num_feat_per_step = 1,              # you hard-coded this
+        policy_head = "gmm",      # or "gmm" for GMM output
     ).to(device)
 
-    criterion = nn.MSELoss()
     optimiser = optim.AdamW(model.parameters(), lr=cfg.lr)
 
     # ❸ training loop ----------------------------------------------------
@@ -151,23 +151,20 @@ def main(cfg):
 
         # print("mean value in pc : ", pc.mean().item())
 
-        target = target.mean(dim=1)  # (B, sem_dim)
+        # target = target.mean(dim=1)  # (B, sem_dim)
         # print("mean value in target: ", target.mean().item())
-        preds = model({'obs': obs_low, 'point_cloud': pc})
-        preds = preds.mean(dim=1)  # (B, sem_dim)
+        info = model.update({'obs': obs_low, 'point_cloud': pc}, target, optimizer=optimiser)
+        loss = info['loss']
+        mse = info['mse']
         # print(preds.shape, target.shape)
         # print("mean value in target: ", target.mean(dim=1))
-        loss  = criterion(preds, target)
         # print("mean value in preds: ", preds.mean().item())
-
-        optimiser.zero_grad(set_to_none=True)
-        loss.backward()
-        optimiser.step()
 
         if step % cfg.log == 0 or step == 1:
             dt = time.time() - t0
             print(f"[{step:>6}/{cfg.steps}] "
-                  f"loss={loss.item():.5f}   "
+                  f"loss={loss:.5f}   "
+                  f"mse={mse:.5f}   "
                   f"fps={(cfg.batch * cfg.frames) / dt:,.0f}")
             t0 = time.time()
             torch.save(model.state_dict(), f"checkpoint_{step:04d}.pt")

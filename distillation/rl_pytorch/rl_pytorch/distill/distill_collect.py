@@ -227,7 +227,7 @@ class DistillCollector:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.is_testing = is_testing
-        self.current_learning_iteration = 42
+        self.current_learning_iteration = 0
 
         self.apply_reset = apply_reset
         self.teacher_resume = teacher_resume
@@ -355,7 +355,7 @@ class DistillCollector:
             ep_infos = []
 
             storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [],
-                       'pc_embedding': [], 'done': [], 'env_id': []}  # , 'pointcloud': []}
+                       'pc_embedding': [], 'done': [], 'env_id': [], 'assets': self.vec_env.env.assets_buf}  # , 'pointcloud': []}
 
             # Rollout
             for i in range(self.num_transitions_per_env):
@@ -365,7 +365,6 @@ class DistillCollector:
                     current_obs = self.vec_env.reset()
                     current_states = self.vec_env.get_state()
                     dones = torch.zeros(self.vec_env.env.num_envs, dtype=torch.float, device=self.device)
-                
                 teacher_obs = current_obs.copy()
                 teacher_obs["obs"] = current_obs["obs"]["obs"] 
                 teacher_obs["pointcloud"] = current_obs["obs"]["pointcloud"]
@@ -429,10 +428,12 @@ class DistillCollector:
                         print(np.mean(reward_sum), np.mean(episode_length))
                 if i % 200 == 199:
                     for key in storage.keys():
+                        if key == 'assets':
+                            continue
                         storage[key] = torch.stack(storage[key], dim=0)
                         print(storage[key].shape)
                     save_dir = os.path.join(self.teacher_data_dir, "teacher_batch_{}_{}_{}.pt".format(self.worker_id, it, int((i-199)/200)))
-                    torch.save((storage['obs'], storage['actions'], storage['sigmas'], storage['pointcloud'], storage['pc_embedding'], storage['done'], storage['env_id']), save_dir)  
-                    storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [], 'pc_embedding': [], 'done': [], 'env_id': []}  # , 'pointcloud': []
+                    torch.save((storage['obs'], storage['actions'], storage['sigmas'], storage['pointcloud'], storage['pc_embedding'], storage['done'], storage['env_id'], storage['assets']),save_dir)  
+                    storage = {'obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [], 'pc_embedding': [], 'done': [], 'env_id': [], 'assets': self.vec_env.env.assets_buf}  # , 'pointcloud': []
                     reward_sum = []
                     episode_length = []
