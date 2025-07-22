@@ -1252,6 +1252,7 @@ class AllegroArmMOAR(VecTask):
             self.reset_axis_timer +=1
 
             if self.reset_axis_timer >= 100:
+                print("Resetting translation axis")
                 self.reset_axis_timer = 0
                 dirs = torch.tensor([[ 1, 0, 0],    # +x
                      [-1, 0, 0],    # -x
@@ -1679,8 +1680,12 @@ class AllegroArmMOAR(VecTask):
                 # 4. rest of privileged obs (all indices shifted +3)
                 obs_end = sem_start + 3                             # 82
                 self.states_buf[:, obs_end : obs_end + self.num_actions] = self.actions
-                self.states_buf[:, obs_end + self.num_actions :
-                                obs_end + self.num_actions + 24]     = self.spin_axis.repeat(1, 8)
+                if self.rotation_axis == "translation":
+                    self.states_buf[:, obs_end + self.num_actions :
+                                    obs_end + self.num_actions + 24]     = self.translation_axis.repeat(1, 8)
+                else:
+                    self.states_buf[:, obs_end + self.num_actions :
+                                    obs_end + self.num_actions + 24]     = self.spin_axis.repeat(1, 8)
 
                 all_contact = self.contact_tensor.reshape(-1, contacts, 3).clone()
                 all_contact = torch.norm(all_contact, dim=-1).float()
@@ -1735,7 +1740,11 @@ class AllegroArmMOAR(VecTask):
 
             # ------------ indices **UNCHANGED** on policy side ------------
             self.last_obs_buf[:, 45:61] = sensed_c                 # 16-wide
-            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
+            if self.rotation_axis == "translation":
+                self.last_obs_buf[:, 61:85] = self.translation_axis.repeat(1, 8)
+            else:
+
+                self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
 
             # randomisation ------------------------------------------------ #
             self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
@@ -2669,12 +2678,14 @@ def compute_hand_reward_translate(
     disp      = object_pos - object_init_pos            # (B,3)
     proj      = (disp * axis_unit).sum(-1)              # (B,)
     progress_reward = prog_coef * proj                  # linear reward
+    # print("progress_reward", progress_reward[0].cpu().item())
 
     # ---------------------------------------------------------------------- #
     # 2.  Lateral drift: distance orthogonal to axis
     # ---------------------------------------------------------------------- #
     drift_vec = disp - proj.unsqueeze(-1) * axis_unit   # (B,3)
     drift_pen = drift_coef * torch.norm(drift_vec, dim=-1)
+    # print("drift_pen", drift_pen[0].cpu().item())
 
     # ---------------------------------------------------------------------- #
     # 3.  Orientation penalty (quat distance to initial rot)
@@ -2682,11 +2693,13 @@ def compute_hand_reward_translate(
     quat_diff   = quat_mul(object_rot, quat_conjugate(object_init_rot))   # (B,4)
     rot_dist    = 2.0 * torch.asin(torch.clamp(torch.norm(quat_diff[:, :3], dim=-1), max=1.0))
     rot_pen     = rot_coef * rot_dist
+    # # print("rot_pen", rot_pen[0].cpu().item())
 
     # ---------------------------------------------------------------------- #
     # 4.  Optional speed penalty (helps stabilise object)
     # ---------------------------------------------------------------------- #
     vel_pen = vel_coef * torch.norm(object_linvel, dim=-1)
+    # print("vel_pen", vel_pen[0].cpu().item())
 
     # ---------------------------------------------------------------------- #
     # 5.  Contact & finger rewards (same pattern as spin kernel)

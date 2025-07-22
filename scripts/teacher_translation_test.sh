@@ -1,5 +1,5 @@
 GPUS=$1
-CKPT=/home/william/Downloads/last_z-axis-working-objsem-w-rot-32dim-z-reward_ep_12000_rew_110.840256.pth
+CKPT=/home/william/Desktop/USC/in-hand-rotation/runs/translation-test/S1.0_C0.0_M0.02025-07-21_17-56-15-43458/nn/translation-test.pth
 len=${#array[@]}
 EXTRA_ARGS=${array[@]:1:$len}
 EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
