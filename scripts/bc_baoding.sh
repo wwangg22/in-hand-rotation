@@ -14,9 +14,9 @@ train.params.config.minibatch_size=1024 \
 train.params.config.central_value_config.minibatch_size=1024 \
 task.env.observationType=full_stack_baoding \
 distill.ablation_mode=multi-modality-plus \
-distill.teacher_data_dir=demonstration-baoding-2 \
-distill.student_logdir=runs/student/bc-baoding-multimodplus-2 \
+distill.teacher_data_dir=test-baoding3 \
+distill.student_logdir=runs/student/test \
 train.params.config.user_prefix=bc-baoding-multimodplus \
 task.env.ablation_mode=multi-modality-plus \
-experiment=bc-baoding-multimodplus-2 wandb_activate=True \
+experiment=bc-baoding-multimodplus-2 wandb_activate=False \
 ${EXTRA_ARGS}

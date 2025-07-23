@@ -2426,8 +2426,8 @@ class AllegroArmMOAR(VecTask):
         else:
             object_indices = torch.unique(torch.cat([self.object_indices[env_ids]]).to(torch.int32))
         # reset spinning axis
-        if not self.use_initial_rotation:
-            self.reset_spin_axis(env_ids, init_quat=new_object_rot)
+        if not self.use_initial_rotation and not self.object_set_id == "working":
+            self.reset_spin_axis(env_ids)
         else:
             self.reset_spin_axis(env_ids, init_quat=new_object_rot)
 

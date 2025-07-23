@@ -363,7 +363,10 @@ class ModelA2CContinuousLogStd(BaseModel):
             if isinstance(input_dict['obs'], dict):
                 input_dict['obs']['obs'] = self.norm_obs(input_dict['obs']['obs'])
             else:
+                print("before normalization : ", input_dict['obs'].mean())
                 input_dict['obs'] = self.norm_obs(input_dict['obs'])
+                print("after normalization : ", input_dict['obs'].mean())
+
            
             mu, logstd, value, states = self.a2c_network(input_dict)
             

@@ -360,6 +360,7 @@ class DistillCollector:
                 with torch.no_grad():
                     res_dict = self.get_action_values(self.teacher_actor_critic, teacher_obs, mode='teacher')
                     teacher_actions = res_dict['actions']
+                    # print("teacher actions :", teacher_actions[0])
                     teacher_mus = res_dict['mus']
                     teacher_sigmas = res_dict['sigmas']
 

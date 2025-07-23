@@ -1134,6 +1134,7 @@ class DistillWarmUpTrainer:
                 with torch.no_grad():
                     res_dict = self.get_action_values(self.teacher_actor_critic, teacher_obs, mode='teacher')
                     teacher_actions = res_dict['actions']
+                    # print("teacher actions :", teacher_actions[0])
                     teacher_mus = res_dict['mus']
                     teacher_sigmas = res_dict['sigmas']
 
@@ -1142,7 +1143,7 @@ class DistillWarmUpTrainer:
                     storage['sigmas'].extend(teacher_sigmas)
                     storage['pointcloud'].extend(current_obs['obs']['pointcloud'])
 
-                    next_obs, rews, dones, infos = self.vec_env.step(torch.clamp(student_actions, - 1.0, 1.0))
+                    next_obs, rews, dones, infos = self.vec_env.step(torch.clamp(teacher_actions, - 1.0, 1.0))
                     next_states = self.vec_env.env.get_state()
                 # Record the transition
                 current_obs = next_obs
