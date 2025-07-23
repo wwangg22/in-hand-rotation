@@ -125,9 +125,9 @@ DEFAULTS = dict(
     hidden_dim      = 80,      # transformer inner size
     repr_dim        = 80,       # point-cloud embedding size
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
-    lr              = 1e-4,
+    lr              = 3e-4,
     steps           = 4000,   # optimisation steps, not epochs
-    batch_size      = 128,       # episodes per update
+    batch_size      = 256,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
     log_every       = 50,
 )
@@ -187,7 +187,7 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    model_ckpt = torch.load("checkpoint_0100.pt", map_location=device)
+    model_ckpt = torch.load("transformer_w_dagger1.pt", map_location=device)
     model.load_state_dict(model_ckpt, strict=True)
 
 
@@ -221,12 +221,12 @@ def main(cfg):
         batch   = ds.sample(cfg.batch, cfg.frames)               # CPU
         obs_low = _preproc_obs(batch['obs']).to(device)          # (B,F,356)
         pc      = batch['pointcloud'].to(device)                 # (B,F,808,6)
-        target_stored = batch['pc_embedding'].to(device)         # (B,F,D)
+        # target_stored = batch['pc_embedding'].to(device)         # (B,F,D)
 
-        # -------- (1) update on stored embeddings ---------------------
-        info1 = model.update({'obs': obs_low, 'point_cloud': pc},
-                             target_stored,
-                             optimizer=optimiser)
+        # # -------- (1) update on stored embeddings ---------------------
+        # info1 = model.update({'obs': obs_low, 'point_cloud': pc},
+        #                      target_stored,
+        #                      optimizer=optimiser)
         
         for j in range(5):
             fresh_list = []
@@ -250,7 +250,6 @@ def main(cfg):
             dt  = time.time() - t0
             fps = (2 * cfg.batch * cfg.frames) / max(dt, 1e-5)   # two updates
             print(f"[{step:>6}/{cfg.steps}] "
-                  f"loss1={info1['loss']:.5f}  mse1={info1['mse']:.5f} | "
                   f"loss2={info2['loss']:.5f}  mse2={info2['mse']:.5f} | "
                   f"fps={fps:,.0f}")
             t0 = time.time()
