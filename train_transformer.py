@@ -125,11 +125,11 @@ DEFAULTS = dict(
     hidden_dim      = 80,      # transformer inner size
     repr_dim        = 80,       # point-cloud embedding size
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
-    lr              = 3e-4,
+    lr              = 1e-4,
     steps           = 4000,   # optimisation steps, not epochs
     batch_size      = 256,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
-    log_every       = 50,
+    log_every       = 100,
 )
 def _preproc_obs( obs_batch):
     import copy
@@ -187,7 +187,7 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    model_ckpt = torch.load("transformer_w_dagger1.pt", map_location=device)
+    model_ckpt = torch.load("transformer_w_dagger2.pt", map_location=device)
     model.load_state_dict(model_ckpt, strict=True)
 
 
