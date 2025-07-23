@@ -362,6 +362,7 @@ class DistillCollector:
                     teacher_actions = res_dict['actions']
                     # print("teacher actions :", teacher_actions[0])
                     teacher_mus = res_dict['mus']
+                    print("teacher mus :", teacher_mus[0])
                     teacher_sigmas = res_dict['sigmas']
 
                     storage['obs'].extend(current_obs['obs']['student_obs'])
