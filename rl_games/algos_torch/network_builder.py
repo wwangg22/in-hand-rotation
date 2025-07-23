@@ -213,7 +213,7 @@ class A2CBuilder(NetworkBuilder):
                 )
                 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
 
-                state_dict = torch.load("checkpoint_0100.pt", map_location="cuda")
+                state_dict = torch.load("checkpoint_0300.pt", map_location="cuda")
                 self.transformer = ObjectSemanticsTransformer(
                     repr_dim = DEFAULTS['repr_dim'],
                     act_dim  = DEFAULTS['sem_dim'],
@@ -341,7 +341,7 @@ class A2CBuilder(NetworkBuilder):
 
                 self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
                 self.pc_buffer[:, -1] = obs_dict['obs']['pointcloud']
-                print('shape of obs_dict pc' , obs_dict['obs']['pointcloud'].shape)
+                # print('shape of obs_dict pc' , obs_dict['obs']['pointcloud'].shape)
                 # print('mean value in point cloud : ' , self.pc_buffer.mean().item())
 
                 self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
