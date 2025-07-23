@@ -40,7 +40,7 @@ env:
   finger_coef: 0.1
   handInit: "default"
   numEnvs: ${resolve_default:16,${...num_envs}} 
-  prog_coef: 1.0
+  prog_coef: 1.2
   drift_coef: -0.3
   rot_coef: -0.01
   envSpacing: 0.75
@@ -99,7 +99,7 @@ env:
   controlPenaltyScale: 0.0
   reachGoalBonus: 250
   fallDistance: 0.065
-  fallPenalty: -50.0
+  fallPenalty: -5.0
 
   objectType: "block" 
   observationType: "partial_contact" 

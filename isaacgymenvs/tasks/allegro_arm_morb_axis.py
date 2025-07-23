@@ -495,9 +495,11 @@ class AllegroArmMOAR(VecTask):
 
         self.palm_center = torch.tensor([5.7225e-01, 1.0681e-04, 1.7850e-01], device="cuda:0")
 
-        self.relative_limit_x = torch.tensor([0.12, 0.0], device="cuda:0") # x can be -0.04, but for stability reason no
+        self.relative_limit_x = torch.tensor([0.07, 0.0], device="cuda:0") # x can be -0.04, but for stability reason no 
+        #real bounds [0.15, -0.05]
 
-        self.relative_limit_y = torch.tensor([0.035, -0.035], device="cuda:0")
+        self.relative_limit_y = torch.tensor([0.01, -0.01], device="cuda:0")
+        #real bounds [0.035, -0.035]
 
         self.translation_axis = torch.zeros(self.cfg["env"]["numEnvs"], 3, dtype=torch.float, device="cuda:0")
         self.prog_coef = self.cfg["env"].get("prog_coef", 1.0)
@@ -1251,7 +1253,7 @@ class AllegroArmMOAR(VecTask):
         elif self.rotation_axis == "translation":
             self.reset_axis_timer +=1
 
-            if self.reset_axis_timer >= 100:
+            if self.reset_axis_timer >= 500:
                 print("Resetting translation axis")
                 self.reset_axis_timer = 0
                 dirs = torch.tensor([[ 1, 0, 0],    # +x
@@ -1264,9 +1266,6 @@ class AllegroArmMOAR(VecTask):
                 self.translation_axis = dirs[rand_idx]  # (k,3)  random axis
 
 
-            # --------------------------------------------
-            #  call the TorchScript reward you already have
-            # --------------------------------------------
             torque_penalty = (self.torques ** 2).sum(-1)
             work_penalty   = (self.torques.abs() * self.dof_vel_finite_diff.abs()).sum(-1)
 
@@ -1295,7 +1294,7 @@ class AllegroArmMOAR(VecTask):
                     self.control_error, self.actions, self.action_penalty_scale,
                     self.success_tolerance, self.fall_dist, self.fall_penalty,
                     torque_penalty, work_penalty,
-                    self.max_consecutive_successes, self.av_factor
+                    self.max_consecutive_successes, self.av_factor, self.palm_center
                 )
             )
 
@@ -2670,12 +2669,13 @@ def compute_hand_reward_translate(
         fall_penalty         : float,
         torque_penalty       , work_penalty, # (B,) already pre‑computed
         max_consecutive_successes : int,
-        av_factor            : float
+        av_factor            : float,
+        palm_center
 ):
     # ---------------------------------------------------------------------- #
     # 1.  Progress along axis (positive = forward)
     # ---------------------------------------------------------------------- #
-    disp      = object_pos - object_init_pos            # (B,3)
+    disp      = object_pos - palm_center.unsqueeze(0)            # (B,3)
     proj      = (disp * axis_unit).sum(-1)              # (B,)
     progress_reward = prog_coef * proj                  # linear reward
     # print("progress_reward", progress_reward[0].cpu().item())
@@ -2734,7 +2734,7 @@ def compute_hand_reward_translate(
           + action_pen
           + control_error * control_penalty_scale
     )
-    rew_buf[:] = rew
+    
 
     # ---------------------------------------------------------------------- #
     # 8.  Reset logic
@@ -2746,7 +2746,9 @@ def compute_hand_reward_translate(
     resets = torch.where(fall | timed_out,
                          torch.ones_like(reset_buf),
                          torch.zeros_like(reset_buf))
+    rew = torch.where(object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist), rew + fall_penalty, rew)
     reset_buf[:] = resets
+    rew_buf[:] = rew
 
     # Consecutive‑success bookkeeping left unchanged
     goal_resets = torch.zeros_like(reset_buf)   # not used here
