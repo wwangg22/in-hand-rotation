@@ -127,9 +127,9 @@ DEFAULTS = dict(
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
     lr              = 1e-4,
     steps           = 4000,   # optimisation steps, not epochs
-    batch_size      = 256,       # episodes per update
+    batch_size      = 128,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
-    log_every       = 100,
+    log_every       = 50,
 )
 def _preproc_obs( obs_batch):
     import copy
@@ -145,7 +145,7 @@ def _preproc_obs( obs_batch):
             obs_batch = obs_batch.float() / 255.0
     return obs_batch
 
-ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-rot-32dim-new_ep_16000_rew_220.98907.pth"
+ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-rot-working-obj-only_ep_18000_rew_393.59058.pth"
 
 @functools.lru_cache(maxsize=None)
 def load_vertices(fname: str) -> torch.Tensor:
@@ -187,9 +187,8 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    model_ckpt = torch.load("transformer_w_dagger2.pt", map_location=device)
-    model.load_state_dict(model_ckpt, strict=True)
-
+    # model_ckpt = torch.load("transformer_w_dagger2.pt", map_location=device)
+    # model.load_state_dict(model_ckpt, strict=True)
 
     prefix   = "a2c_network.pc_encoder."
     pc_state = {k[len(prefix):]: v for k, v in ckpt["model"].items()
@@ -203,15 +202,15 @@ def main(cfg):
 
     optimiser = optim.AdamW(model.parameters(), lr=cfg.lr)
 
-    batch = ds.sample(cfg.batch, cfg.frames)
+    # batch = ds.sample(cfg.batch, cfg.frames)
 
-    mesh_path = os.path.join(
-                              "assets/urdf/objects/meshes/custom",
-                              batch["asset"][1], "textured.obj")
+    # mesh_path = os.path.join(
+    #                           "assets/urdf/objects/meshes/custom",
+    #                           batch["asset"][1], "textured.obj")
 
-    verts = load_vertices(mesh_path)     # (V,3)  CPU tensor
+    # verts = load_vertices(mesh_path)     # (V,3)  CPU tensor
 
-    embeds = pointnet_embed(verts, pc_encoder)
+    # embeds = pointnet_embed(verts, pc_encoder)
 
     # ❸ training loop ----------------------------------------------------
     t0 = time.time()

@@ -280,7 +280,13 @@ class AllegroArmMOAR(VecTask):
                   'set_obj13_irregular_block', 'set_obj14_irregular_block_cross', 'set_obj15_irregular_block_time',
                   'set_obj16_cylinder_axis'],
             "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
-            "working":["black_marker", "stapler_2", "blue_cup", 
+            "working" : [
+                 "blue_cup", 
+                "blue_moon", "blue_tea_box", 
+                "conditioner", "phillips_screwdriver", "flat_screwdriver",
+                "remote_controller_1", "repellent"
+            ],
+            "all":["black_marker", "stapler_2", "blue_cup", 
                 "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", 
                 "conditioner", "correction_fluid", "bowl", "scissors", "mug","fork",
                 "phillips_screwdriver", "flat_screwdriver", "stapler_1", "large_clamp",
