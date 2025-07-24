@@ -9,7 +9,6 @@ task.env.objSet=working task=AllegroArmMOAR task.env.axis=translation \
 task.env.numEnvs=4096 train.params.config.minibatch_size=16384 \
 train.params.config.central_value_config.minibatch_size=16384 \
 task.env.observationType=full_stack_obj_sem task.env.legacy_obs=False \
-task.env.ablation_mode=no-pc experiment=translation-test \
-checkpoint=${CKPT} \
+task.env.ablation_mode=no-pc experiment=translation-big-fall-pen-cup \
 wandb_activate=True \
 ${EXTRA_ARGS}

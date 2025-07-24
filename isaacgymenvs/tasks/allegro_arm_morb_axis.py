@@ -282,9 +282,9 @@ class AllegroArmMOAR(VecTask):
             "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
             "working":[
                 "blue_cup", 
-                "blue_moon", "blue_tea_box", 
-                "conditioner", "phillips_screwdriver", "flat_screwdriver",
-                "remote_controller_1", "repellent"
+                # "blue_moon", "blue_tea_box", 
+                # "conditioner", "phillips_screwdriver", "flat_screwdriver",
+                # "remote_controller_1", "repellent"
             ],
             "translation":[
                 "blue_cup", 
@@ -493,9 +493,9 @@ class AllegroArmMOAR(VecTask):
         self.scale_min = 0.90 
         self.scale_max = 1.10
 
-        self.palm_center = torch.tensor([5.7225e-01, 1.0681e-04, 1.7850e-01], device="cuda:0")
+        self.palm_center = torch.tensor([0.63, 1.0681e-04, 1.7850e-01], device="cuda:0") #5.7225e-01
 
-        self.relative_limit_x = torch.tensor([0.07, 0.0], device="cuda:0") # x can be -0.04, but for stability reason no 
+        self.relative_limit_x = torch.tensor([0.01, -0.01], device="cuda:0") # x can be -0.04, but for stability reason no 
         #real bounds [0.15, -0.05]
 
         self.relative_limit_y = torch.tensor([0.01, -0.01], device="cuda:0")
@@ -1253,7 +1253,7 @@ class AllegroArmMOAR(VecTask):
         elif self.rotation_axis == "translation":
             self.reset_axis_timer +=1
 
-            if self.reset_axis_timer >= 500:
+            if self.reset_axis_timer >= 100:
                 print("Resetting translation axis")
                 self.reset_axis_timer = 0
                 dirs = torch.tensor([[ 1, 0, 0],    # +x
@@ -2723,6 +2723,7 @@ def compute_hand_reward_translate(
     # 7.  Aggregate
     # ---------------------------------------------------------------------- #
     control_penalty_scale = 0.1
+            
     rew = ( progress_reward
           + drift_pen
           + rot_pen
@@ -2734,6 +2735,8 @@ def compute_hand_reward_translate(
           + action_pen
           + control_error * control_penalty_scale
     )
+    # z_reward = object_pos[:, ..., 2] - 0.22
+    # rew = torch.where(z_reward >0 , rew + 0.05, rew) # z axis reward
     
 
     # ---------------------------------------------------------------------- #
