@@ -187,8 +187,8 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    # model_ckpt = torch.load("transformer_w_dagger2.pt", map_location=device)
-    # model.load_state_dict(model_ckpt, strict=True)
+    model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
+    model.load_state_dict(model_ckpt, strict=True)
 
     prefix   = "a2c_network.pc_encoder."
     pc_state = {k[len(prefix):]: v for k, v in ckpt["model"].items()
