@@ -1,5 +1,5 @@
 GPUS=$1
-CKPT=/home/william/Desktop/USC/in-hand-rotation/runs/translation-test/S1.0_C0.0_M0.02025-07-21_17-56-15-43458/nn/translation-test.pth
+CKPT=/home/william/Downloads/translation-big-fall-pen.pth
 len=${#array[@]}
 EXTRA_ARGS=${array[@]:1:$len}
 EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
