@@ -150,10 +150,11 @@ class DistillWarmUpTrainer:
         # We now define teacher network.
         self.teacher_builder = model_builder.ModelBuilder()
         self.teacher_network = self.teacher_builder.load(teacher_params)
-        if isinstance(self.obs_shape, dict):
-            self.teacher_obs_shape = self.obs_shape['obs']
-        else:
-            self.teacher_obs_shape = self.obs_shape
+        # if isinstance(self.obs_shape, dict):
+        #     self.teacher_obs_shape = self.obs_shape['obs']
+        # else:
+        #     self.teacher_obs_shape = self.obs_shape
+        self.teacher_obs_shape = self.obs_shape
 
         # print("Teacher observation shape:", self.teacher_obs_shape)
         # print("Observation space:", self.observation_space) 
@@ -195,38 +196,38 @@ class DistillWarmUpTrainer:
             }
             self.teacher_central_value_net = central_value.CentralValueTrain(**teacher_cv_config).to(self.device)
 
-        # We now define student network.
-        self.student_builder = model_builder.ModelBuilder()
-        self.student_network = self.student_builder.load(student_params)
-        if self.ablation_mode == "no-tactile":
-            self.student_obs_shape = {'obs': (276, ), 'pointcloud': (680, 6)}
-        elif self.ablation_mode == "multi-modality-plus":
-            self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (808, 6)}
-        elif self.ablation_mode == "aug":
-            self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (680, 6)}
-        elif self.ablation_mode == "no-pc":
-            self.student_obs_shape = self.obs_shape['student_obs']
-        else:
-            raise NotImplementedError
+        # # We now define student network.
+        # self.student_builder = model_builder.ModelBuilder()
+        # self.student_network = self.student_builder.load(student_params)
+        # if self.ablation_mode == "no-tactile":
+        #     self.student_obs_shape = {'obs': (276, ), 'pointcloud': (680, 6)}
+        # elif self.ablation_mode == "multi-modality-plus":
+        #     self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (808, 6)}
+        # elif self.ablation_mode == "aug":
+        #     self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (680, 6)}
+        # elif self.ablation_mode == "no-pc":
+        #     self.student_obs_shape = self.obs_shape['student_obs']
+        # else:
+        #     raise NotImplementedError
         
-        self.student_build_config = {
-            'actions_num': self.actions_num,
-            'input_shape': self.student_obs_shape,
-            'num_seqs': self.num_actors * self.num_agents,
-            'value_size': self.env_info.get('value_size', 1),
-            'normalize_value': self.normalize_value,
-            'normalize_input': self.normalize_input,
-        }
-        self.student_actor_critic = self.student_network.build(self.student_build_config)
-        self.student_actor_critic.to(self.device)
+        # self.student_build_config = {
+        #     'actions_num': self.actions_num,
+        #     'input_shape': self.student_obs_shape,
+        #     'num_seqs': self.num_actors * self.num_agents,
+        #     'value_size': self.env_info.get('value_size', 1),
+        #     'normalize_value': self.normalize_value,
+        #     'normalize_input': self.normalize_input,
+        # }
+        # self.student_actor_critic = self.student_network.build(self.student_build_config)
+        # self.student_actor_critic.to(self.device)
 
-        if student_resume is not None and student_resume != "None":
-            student_path = "{}/{}.pth".format(student_log_dir, student_resume)
-            print("Loading student model from", student_path)
-            self.student_load(student_path)
+        # if student_resume is not None and student_resume != "None":
+        #     student_path = "{}/{}.pth".format(student_log_dir, student_resume)
+        #     print("Loading student model from", student_path)
+        #     self.student_load(student_path)
 
-        self.optimizer = optim.Adam(
-            self.student_actor_critic.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        # self.optimizer = optim.Adam(
+        #     self.student_actor_critic.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
         # PPO parameters
         self.num_learning_epochs = num_learning_epochs
@@ -273,11 +274,11 @@ class DistillWarmUpTrainer:
 
     def teacher_load(self, path):
         checkpoint = torch_ext.load_checkpoint(path)
-        self.teacher_actor_critic.load_state_dict(checkpoint['model'])
+        self.teacher_actor_critic.load_state_dict(checkpoint['model'], strict=False)
         self.set_stats_weights(self.teacher_actor_critic, checkpoint)
-        if self.has_central_value:
-            self.teacher_central_value_net.load_state_dict(checkpoint['assymetric_vf_nets'])
-            self.teacher_central_value_net.eval()
+        # if self.has_central_value:
+        #     self.teacher_central_value_net.load_state_dict(checkpoint['assymetric_vf_nets'])
+        #     self.teacher_central_value_net.eval()
         env_state = checkpoint.get('env_state', None)
         if self.vec_env is not None:
             self.vec_env.set_env_state(env_state)
@@ -816,7 +817,12 @@ class DistillWarmUpTrainer:
         while not finished_mask.all():
             # ───── build teacher input exactly as in training ────────────────────
             teacher_obs          = obs_env.copy()
-            teacher_obs["obs"]   = obs_env["obs"]["obs"]       # unwrap dict-of-dict
+            # teacher_obs["obs"]   = obs_env["obs"]["obs"]       # unwrap dict-of-dict
+            teacher_obs["obs"] = {
+                "obs": obs_env["obs"]["obs"],
+                "test": obs_env["obs"]["test"],
+                "pointcloud": obs_env["obs"]["pointcloud"]
+            }
             res                  = self.get_action_values(self.teacher_actor_critic,
                                                         teacher_obs,
                                                         mode="teacher")
@@ -892,8 +898,12 @@ class DistillWarmUpTrainer:
         while max_steps is None:
             # ---- build observation exactly like play_teacher_forever ----------
             teacher_obs        = obs.copy()
-            teacher_obs["obs"] = obs["obs"]["obs"]     # unwrap dict-of-dict
-
+            # teacher_obs["obs"] = obs["obs"]["obs"]     # unwrap dict-of-dict
+            teacher_obs["obs"] = {
+                "obs": obs["obs"]["obs"],
+                "test": obs["obs"]["test"],
+                "pointcloud": obs["obs"]["pointcloud"]
+            }
             res     = self.get_action_values(net, teacher_obs, mode="teacher")
             actions = torch.clamp(res["actions"], -1.0, 1.0)
 

@@ -213,7 +213,7 @@ class A2CBuilder(NetworkBuilder):
                 )
                 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer, MLPwPC
 
-                state_dict = torch.load("checkpoint_0050.pt", map_location="cuda")
+                state_dict = torch.load("checkpoint_1300.pt", map_location="cuda")
                 self.transformer = ObjectSemanticsTransformer(
                     repr_dim = DEFAULTS['repr_dim'],
                     act_dim  = DEFAULTS['sem_dim'],
@@ -345,32 +345,34 @@ class A2CBuilder(NetworkBuilder):
         def forward(self, obs_dict):
             if isinstance(obs_dict['obs'], dict):
                 obs = obs_dict['obs']['obs']
-                # print(obs.shape, obs_dict['obs']['pointcloud'].shape)
+                # print("OBS SHAPE: ", obs.shape)
+                # print("pointcloud shape: ", obs_dict['obs']['pointcloud'].shape)
+                # print("test shape: ", obs_dict['obs']['test'].shape)
                 pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['test'])
 
-                # self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
-                # self.pc_buffer[:, -1] = obs_dict['obs']['pointcloud']
-                # # print('shape of obs_dict pc' , obs_dict['obs']['pointcloud'].shape)
-                # # print('mean value in point cloud : ' , self.pc_buffer.mean().item())
+                self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
+                self.pc_buffer[:, -1] = obs_dict['obs']['pointcloud']
+                # print('shape of obs_dict pc' , obs_dict['obs']['pointcloud'].shape)
+                # print('mean value in point cloud : ' , self.pc_buffer.mean().item())
 
-                # self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
-                # self.obs_buffer[:, -1] = obs_dict['obs']['unnorm_obs']
+                self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
+                self.obs_buffer[:, -1] = obs_dict['obs']['unnorm_obs']
 
                 # # print("mean value in obs : ", self.obs_buffer.mean().item())
 
-                # trans_obs = {
-                #     'obs': self.obs_buffer,
-                #     'point_cloud': self.pc_buffer
-                # }
+                trans_obs = {
+                    'obs': self.obs_buffer,
+                    'point_cloud': self.pc_buffer
+                }
 
-                # with torch.no_grad():
-                #     pc_embedding_ac = self.transformer(trans_obs).mean.mean(dim=1)
+                with torch.no_grad():
+                    pc_embedding_ac = self.transformer(trans_obs).mean.mean(dim=1)
 
                 # print("diff in pc_embedding: ", torch.abs(pc_embedding - pc_embedding_ac).mean().item())
                 # print("mean value in pc_embedding: ", pc_embedding.mean().item())
                 # print("mean value in ac pc_embedding: ", pc_embedding_ac.mean().item())
 
-                # actual_obj_semantics = obs_dict['obs']['obs'][:,-16:]
+                # actual_obj_semantics = obs_dict['obs']['unnorm_obs'][:,-16:]
                 # obs_dict_sem = {
                 #     'obs': obs_dict['obs']['unnorm_obs'][:, :-16],
                 #     'point_cloud': obs_dict['obs']['pointcloud']
@@ -383,7 +385,7 @@ class A2CBuilder(NetworkBuilder):
                 #     pc_embedding, device=pc_embedding.device, dtype=torch.float32
                 # ).uniform_(-1.0, 1.0) #ablation test
                 # print(pc_embedding.shape)
-                obs = torch.cat([obs, pc_embedding], dim=-1)
+                obs = torch.cat([obs, pc_embedding_ac], dim=-1)
             else:
                 obs = obs_dict['obs']
                 pc_embedding = None
