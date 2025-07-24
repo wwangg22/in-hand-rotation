@@ -361,11 +361,19 @@ class ModelA2CContinuousLogStd(BaseModel):
             prev_actions = input_dict.get('prev_actions', None)
 
             if isinstance(input_dict['obs'], dict):
+                print("before normalization : ", input_dict['obs']['obs'].mean())
+                print("max value before normalization : ", input_dict['obs']['obs'].max())
+                print("input_dict['obs']['obs'].shape : ", input_dict['obs']['obs'].shape)
                 input_dict['obs']['obs'] = self.norm_obs(input_dict['obs']['obs'])
+                print("after normalization : ", input_dict['obs']['obs'].mean())
+                print("max value after normalization : ", input_dict['obs']['obs'].max())
+                pass
             else:
-                print("before normalization : ", input_dict['obs'].mean())
+                # print("before normalization : ", input_dict['obs'].mean())
+                # print("max value before normalization : ", input_dict['obs'].max())
                 input_dict['obs'] = self.norm_obs(input_dict['obs'])
-                print("after normalization : ", input_dict['obs'].mean())
+                # print("after normalization : ", input_dict['obs'].mean())
+                # print("max value after normalization : ", input_dict['obs'].max())
 
            
             mu, logstd, value, states = self.a2c_network(input_dict)

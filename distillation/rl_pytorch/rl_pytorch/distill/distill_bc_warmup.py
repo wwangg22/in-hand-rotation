@@ -253,6 +253,11 @@ class DistillWarmUpTrainer:
         assert teacher_resume is not None
         self.teacher_data_dir = teacher_data_dir
 
+        self.teacher_load(
+            "{}/{}.pth".format(self.teacher_log_dir, self.teacher_resume))
+        
+        self.student_actor_critic.running_mean_std = self.teacher_actor_critic.running_mean_std
+
     def mini_batch_generator(self, num_mini_batches):
         batch_size = 200 * 64 * self.mini_data_size  # self.vec_env.env.num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
@@ -553,6 +558,8 @@ class DistillWarmUpTrainer:
                 #     f"({pct_close:.1f} %).")
 
                 # Imitation loss
+
+                mu_batch = torch.clamp(mu_batch, -1.0, 1.0)
                 bc_loss = torch.sum(self.recon_criterion(mu_batch, torch.clamp(teacher_actions_batch, -1.0, 1.0)), dim=-1).mean() 
                 # bc_loss = torch.sum(self.recon_criterion(mu_batch, teacher_actions_batch), dim=-1).mean() 
                 loss = self.bc_loss_coef * bc_loss
@@ -1136,7 +1143,7 @@ class DistillWarmUpTrainer:
                     teacher_actions = res_dict['actions']
                     # print("teacher actions :", teacher_actions[0])
                     teacher_mus = res_dict['mus']
-                    print("teacher mus :", teacher_mus[0])
+                    # print("teacher mus :", teacher_mus[0])
                     teacher_sigmas = res_dict['sigmas']
 
                     storage['obs'].extend(current_obs['obs']['student_obs'])

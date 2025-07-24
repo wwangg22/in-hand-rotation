@@ -43,29 +43,62 @@ class RunningMeanStd(nn.Module):
         return new_mean, new_var, new_count
 
     def forward(self, input, unnorm=False, mask=None):
-        if self.training:
-            if mask is not None:
-                mean, var = torch_ext.get_mean_std_with_masks(input, mask)
-            else:
-                mean = input.mean(self.axis) # along channel axis
-                var = input.var(self.axis)
-            self.running_mean, self.running_var, self.count = self._update_mean_var_count_from_moments(self.running_mean, self.running_var, self.count, 
-                                                    mean, var, input.size()[0] )
+        # if self.training:
+        #     if mask is not None:
+        #         mean, var = torch_ext.get_mean_std_with_masks(input, mask)
+        #     else:
+        #         mean = input.mean(self.axis) # along channel axis
+        #         var = input.var(self.axis)
+        #     self.running_mean, self.running_var, self.count = self._update_mean_var_count_from_moments(self.running_mean, self.running_var, self.count, 
+        #                                             mean, var, input.size()[0] )
 
         # change shape
-        if self.per_channel:
-            if len(self.insize) == 3:
-                current_mean = self.running_mean.view([1, self.insize[0], 1, 1]).expand_as(input)
-                current_var = self.running_var.view([1, self.insize[0], 1, 1]).expand_as(input)
-            if len(self.insize) == 2:
-                current_mean = self.running_mean.view([1, self.insize[0], 1]).expand_as(input)
-                current_var = self.running_var.view([1, self.insize[0], 1]).expand_as(input)
-            if len(self.insize) == 1:
-                current_mean = self.running_mean.view([1, self.insize[0]]).expand_as(input)
-                current_var = self.running_var.view([1, self.insize[0]]).expand_as(input)        
+        # if self.per_channel:
+        #     if len(self.insize) == 3:
+        #         current_mean = self.running_mean.view([1, self.insize[0], 1, 1]).expand_as(input)
+        #         current_var = self.running_var.view([1, self.insize[0], 1, 1]).expand_as(input)
+        #     if len(self.insize) == 2:
+        #         current_mean = self.running_mean.view([1, self.insize[0], 1]).expand_as(input)
+        #         current_var = self.running_var.view([1, self.insize[0], 1]).expand_as(input)
+        #     if len(self.insize) == 1:
+        #         current_mean = self.running_mean.view([1, self.insize[0]]).expand_as(input)
+        #         current_var = self.running_var.view([1, self.insize[0]]).expand_as(input)        
+        # else:
+        #     current_mean = self.running_mean
+        #     current_var = self.running_var
+
+        d_in  = input.shape[-1]
+        d_buf = self.running_mean.numel()
+
+        if d_in != d_buf:                                      # mismatch → fix
+            if d_in < d_buf:                                   # crop extra dims
+                current_mean = self.running_mean[:d_in]
+                current_var  = self.running_var [:d_in]
+            else:                                              # pad missing dims
+                pad = d_in - d_buf
+                dev = self.running_mean.device
+                current_mean = torch.cat(
+                    [self.running_mean,
+                        torch.zeros(pad, dtype=self.running_mean.dtype, device=dev)]
+                )
+                current_var  = torch.cat(
+                    [self.running_var,
+                        torch.ones (pad, dtype=self.running_var .dtype, device=dev)]
+                )
         else:
-            current_mean = self.running_mean
-            current_var = self.running_var
+            if self.per_channel:
+                if len(self.insize) == 3:
+                    current_mean = self.running_mean.view([1, self.insize[0], 1, 1]).expand_as(input)
+                    current_var = self.running_var.view([1, self.insize[0], 1, 1]).expand_as(input)
+                if len(self.insize) == 2:
+                    current_mean = self.running_mean.view([1, self.insize[0], 1]).expand_as(input)
+                    current_var = self.running_var.view([1, self.insize[0], 1]).expand_as(input)
+                if len(self.insize) == 1:
+                    current_mean = self.running_mean.view([1, self.insize[0]]).expand_as(input)
+                    current_var = self.running_var.view([1, self.insize[0]]).expand_as(input)        
+            else:
+                current_mean = self.running_mean
+                current_var = self.running_var
         # get output
 
 
