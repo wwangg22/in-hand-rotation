@@ -9,11 +9,12 @@ import functools
 from typing import List, Tuple
 
 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
-
+from rl_games.algos_torch.running_mean_std import RunningMeanStd
 class EpisodeDataset:
     """
     Loads full tensors only when they are actually needed, keeps none.
-    Keeps per‑chunk permutation so indices and data stay consistent.
+    Now samples a single random frame per episode, so returned
+    tensors have shape (B, D) instead of (B, F, D).
     """
 
     def __init__(self, folder: str, pattern="*.pt",
@@ -70,55 +71,51 @@ class EpisodeDataset:
     def __len__(self): 
         return len(self.episodes)
 
-    def _sample_one_episode(self, frames: int):
-        pool = [idx for idx, e in enumerate(self.episodes)
-                if (e[2] - e[1] + 1) >= frames]
-        if not pool:
-            raise ValueError(f"No episode ≥{frames} frames")
-        ep_idx      = random.choice(pool)
-        cid, s, e   = self.episodes[ep_idx]
-        item_str    = self.episode_items[ep_idx]
-        idxs        = torch.randperm(e - s + 1)[:frames] + s
-        return cid, idxs, item_str
+    def _sample_one_episode(self):
+        """Pick one episode, then one random frame within it."""
+        cid, s, e = self.episodes[random.randrange(len(self.episodes))]
+        item_str  = self.episode_items[self.episodes.index((cid, s, e))]
+        idx       = random.randint(s, e)           # single frame index
+        return cid, idx, item_str
 
     def _load_chunk(self, cid: int):
         data  = torch.load(self.paths[cid], map_location="cpu")
         order = self.chunk_order[cid]
         # apply same permutation to every tensor we care about
         return dict(
-            obs         = data[0][order],
-            actions     = data[1][order],
-            sigmas      = data[2][order],
-            pointcloud  = data[3][order],
-            pc_embedding= data[4][order],
-            done        = data[5][order],
-            env_id      = data[6][order]
+            obs          = data[0][order],
+            teacher_obs  = data[1][order],
+            actions      = data[2][order],
+            sigmas       = data[3][order],
+            pointcloud   = data[4][order],
+            pc_embedding = data[5][order],
+            done         = data[6][order],
+            env_id       = data[7][order]
         )
 
-    def sample(self, batch_size: int, frames_per_episode: int):
-        keys  = ["obs", "actions", "sigmas",
-                 "pointcloud", "pc_embedding", "done", "env_id"]
+    def sample(self, batch_size: int):
+        keys  = ["obs","teacher_obs","actions","sigmas",
+                 "pointcloud","pc_embedding","done","env_id"]
         batch = {k: [] for k in keys}
         batch["asset"] = []
 
-        choices = [self._sample_one_episode(frames_per_episode)
-                   for _ in range(batch_size)]
+        choices = [self._sample_one_episode() for _ in range(batch_size)]
 
         by_chunk = {}
-        for cid, idxs, item in choices:
-            by_chunk.setdefault(cid, []).append((idxs, item))
+        for cid, idx, item in choices:
+            by_chunk.setdefault(cid, []).append((idx, item))
 
         for cid, idx_item_list in by_chunk.items():
             ch = self._load_chunk(cid)
-            for idxs, item in idx_item_list:
+            for idx, item in idx_item_list:
                 for k in keys:
-                    batch[k].append(ch[k][idxs])
+                    batch[k].append(ch[k][idx])
                 batch["asset"].append(item)
             del ch
             gc.collect()
 
         for k in keys:
-            batch[k] = torch.stack(batch[k], dim=0)
+            batch[k] = torch.stack(batch[k], dim=0)   # (B, D, …)
         return batch
     
 DEFAULTS = dict(
@@ -127,7 +124,7 @@ DEFAULTS = dict(
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
     lr              = 1e-4,
     steps           = 4000,   # optimisation steps, not epochs
-    batch_size      = 512,       # episodes per update
+    batch_size      = 128,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
     log_every       = 50,
 )
@@ -166,6 +163,53 @@ def pointnet_embed(verts: torch.Tensor,
         feat, _ = pc_net(pc)
     return feat.squeeze(0).cpu()    # (OUT_DIM,)
 
+class MLPwPC(nn.Module):
+    """
+    Simple fully‑connected network.
+
+    Args
+    ----
+    in_dim : int
+        Input feature dimension.
+    hidden_dims : list[int]
+        Sizes of hidden layers, e.g. [128, 64].
+    out_dim : int
+        Output dimension.
+    activation : torch.nn.Module, optional
+        Non‑linearity (default: nn.ReLU).
+    dropout : float, optional
+        Dropout probability applied after each hidden layer (default: 0).
+
+    Example
+    -------
+    model = MLP(in_dim=256, hidden_dims=[128, 64], out_dim=10)
+    logits = model(torch.randn(32, 256))
+    """
+    def __init__(self, in_dim, hidden_dims, out_dim,
+                 activation=nn.ReLU, dropout=0.0):
+        super().__init__()
+
+        layers = []
+        last = in_dim + 256 # add 256 for PointNet embedding
+        for h in hidden_dims:
+            layers.append(nn.Linear(last, h))
+            layers.append(activation())
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            last = h
+
+        layers.append(nn.Linear(last, out_dim))
+        # layers.append(nn.Tanh())
+        self.net = nn.Sequential(*layers)
+        self.pc_encoder = PointNet(point_channel=6)
+
+    def forward(self, x, obj_embed):
+        #if x is dict:
+        if isinstance(x, dict):
+            pc_embed,_ = self.pc_encoder(x['point_cloud'])
+            x = torch.cat((x['obs'], pc_embed), dim=-1)
+        x = torch.cat((x, obj_embed), dim=-1)  # (B,F,in_dim+256+32)
+        return self.net(x) 
 
 def main(cfg):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -176,23 +220,33 @@ def main(cfg):
         min_len=cfg.frames,                # prune short eps
     )
 
+    """
+
+    self.obj_buf[:,  : 7]  = self.object_pose
+    self.obj_buf[:,  7:10] = self.object_linvel
+    self.obj_buf[:, 10:13] = self.vel_obs_scale * self.object_angvel
+    self.obj_buf[:, 13:16] = self.object_semantics          # mass, μ, scale
+    """
+
     # ❷ model ------------------------------------------------------------
-    model = ObjectSemanticsTransformer(
-        repr_dim = cfg.repr_dim,
-        act_dim  = cfg.sem_dim,
-        hidden_dim = cfg.hidden_dim,
-        num_feat_per_step = 1,              # you hard-coded this
-        policy_head = "gmm",      # or "gmm" for GMM output
+    model = MLPwPC(
+        in_dim = 340 + 32,
+        hidden_dims = [1024, 1024],
+        out_dim = 16,              # you hard-coded this
     ).to(device)
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
-    model.load_state_dict(model_ckpt, strict=True)
+    # model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
+    # model.load_state_dict(model_ckpt, strict=True)
 
     prefix   = "a2c_network.pc_encoder."
     pc_state = {k[len(prefix):]: v for k, v in ckpt["model"].items()
                 if k.startswith(prefix)}
+    
+    prefix2 = "running_mean_std."
+    norm_state = {k[len(prefix2):]: v for k, v in ckpt["model"].items()
+                if k.startswith(prefix2)}
     
     pc_encoder = PointNet(point_channel=3, output_dim=32)
 
@@ -201,6 +255,10 @@ def main(cfg):
 
 
     optimiser = optim.AdamW(model.parameters(), lr=cfg.lr)
+
+    teacher_normalization = RunningMeanStd((356,)).to(device)
+
+    teacher_normalization.load_state_dict(norm_state)
 
     # batch = ds.sample(cfg.batch, cfg.frames)
 
@@ -217,9 +275,13 @@ def main(cfg):
     for step in range(1, cfg.steps + 1):
 
         # -------- sample batch & send to GPU ---------------------------
-        batch   = ds.sample(cfg.batch, cfg.frames)               # CPU
-        obs_low = _preproc_obs(batch['obs']).to(device)          # (B,F,356)
-        pc      = batch['pointcloud'].to(device)                 # (B,F,808,6)
+        batch   = ds.sample(cfg.batch)               # CPU
+        obs_low = _preproc_obs(batch['obs']).to(device)          # (B,356)
+        pc      = batch['pointcloud'].to(device)                 # (B,808,6)
+        # target = teacher_normalization(batch['teacher_obs'].to(device))          # (B,356)
+        target = batch['teacher_obs'].to(device)          # (B,356)
+
+        target = target[:,  -16:] #only obj semantics
         # target_stored = batch['pc_embedding'].to(device)         # (B,F,D)
 
         # # -------- (1) update on stored embeddings ---------------------
@@ -237,11 +299,30 @@ def main(cfg):
                 fresh_list.append(emb)
             
             fresh = torch.stack(fresh_list).to(device)               # (B,D)
-            fresh = fresh.unsqueeze(1).repeat(1, cfg.frames, 1)      # (B,F,D)
+
+            obs_dict = {
+                'obs': obs_low,
+                'point_cloud': pc,
+            }
+
             
-            info2 = model.update({'obs': obs_low, 'point_cloud': pc},
-                             fresh,
-                             optimizer=optimiser)
+            preds = model(obs_dict, fresh)
+
+            # print(f"preds shape: {preds.shape}, target shape: {target.shape}")
+            # print("mean value of target:", target.mean().item())
+            # print("max value of target:", target.max().item())
+            # print("min value of target:", target.min().item())
+
+            loss = nn.MSELoss()(preds, target)  # (B,F,D) vs (B,F,D)
+            optimiser.zero_grad()
+            loss.backward()
+            optimiser.step()
+
+            info2 = {
+                'loss': loss.item(),
+                'mse': nn.MSELoss()(preds, target).item()
+            }
+
 
     
         # -------- logging & checkpoint -------------------------------
@@ -252,17 +333,15 @@ def main(cfg):
                   f"loss2={info2['loss']:.5f}  mse2={info2['mse']:.5f} | "
                   f"fps={fps:,.0f}")
             t0 = time.time()
-            torch.save(model.state_dict(), f"checkpoint_{step:04d}.pt")
+            torch.save(model.state_dict(), f"adaption_checkpoint_{step:04d}.pt")
             print(f"✓ checkpoint_{step:04d}.pt saved")
 
-    torch.save(model.state_dict(), cfg.out)
-    print("✓ finished; weights saved to", cfg.out)
 
 # -------------------------------------------------------------------------
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("data",            help="root folder with *.pt chunks")
-    p.add_argument("--out", default="semantics.pt", help="model checkpoint")
+    p.add_argument("--out", default="adaption_semantics.pt", help="model checkpoint")
     p.add_argument("--steps",   type=int, default=DEFAULTS['steps'])
     p.add_argument("--batch",   type=int, default=DEFAULTS['batch_size'])
     p.add_argument("--frames",  type=int, default=DEFAULTS['frames_per_ep'])

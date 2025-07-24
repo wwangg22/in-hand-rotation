@@ -233,6 +233,53 @@ class ObjectSemanticsTransformer(nn.Module):
             "mse":         mse.item(),      # float
         }
 
+class MLPwPC(nn.Module):
+    """
+    Simple fully‑connected network.
+
+    Args
+    ----
+    in_dim : int
+        Input feature dimension.
+    hidden_dims : list[int]
+        Sizes of hidden layers, e.g. [128, 64].
+    out_dim : int
+        Output dimension.
+    activation : torch.nn.Module, optional
+        Non‑linearity (default: nn.ReLU).
+    dropout : float, optional
+        Dropout probability applied after each hidden layer (default: 0).
+
+    Example
+    -------
+    model = MLP(in_dim=256, hidden_dims=[128, 64], out_dim=10)
+    logits = model(torch.randn(32, 256))
+    """
+    def __init__(self, in_dim, hidden_dims, out_dim,
+                 activation=nn.ReLU, dropout=0.0):
+        super().__init__()
+
+        layers = []
+        last = in_dim + 256 # add 256 for PointNet embedding
+        for h in hidden_dims:
+            layers.append(nn.Linear(last, h))
+            layers.append(activation())
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            last = h
+
+        layers.append(nn.Linear(last, out_dim))
+        self.net = nn.Sequential(*layers)
+        self.pc_encoder = PointNet(point_channel=6)
+
+    def forward(self, x, obj_embed):
+        #if x is dict:
+        if isinstance(x, dict):
+            pc_embed,_ = self.pc_encoder(x['point_cloud'])
+            x = torch.cat((x['obs'], pc_embed), dim=-1)
+        x = torch.cat((x, obj_embed), dim=-1)  # (B,F,in_dim+256+32)
+        return self.net(x)
+
 
 class VTActorCritic(nn.Module):
     def __init__(self, input_shape, repr_dim, act_dim, hidden_dim, num_feat_per_step=1):

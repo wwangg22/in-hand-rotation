@@ -211,7 +211,7 @@ class A2CBuilder(NetworkBuilder):
                     frames_per_ep   = 12,        # timesteps sampled per episode
                     log_every       = 25,
                 )
-                from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
+                from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer, MLPwPC
 
                 state_dict = torch.load("checkpoint_0050.pt", map_location="cuda")
                 self.transformer = ObjectSemanticsTransformer(
@@ -232,6 +232,15 @@ class A2CBuilder(NetworkBuilder):
 
                 self.obs_buffer = torch.zeros((num_envs, length, input_shape[0]-32), dtype=torch.float, device="cuda")
 
+                self.adaption_model = MLPwPC(
+                    in_dim = 340 + 32,
+                    hidden_dims = [1024, 1024],
+                    out_dim = 16,              # you hard-coded this
+                ).to("cuda")
+
+                adaption_state_dict = torch.load("adaption_checkpoint_0350.pt", map_location="cuda")
+                self.adaption_model.load_state_dict(adaption_state_dict, strict=True)
+                self.adaption_model.eval()
 
             if self.has_cnn:
                 if self.permute_input:
@@ -360,6 +369,16 @@ class A2CBuilder(NetworkBuilder):
                 # print("diff in pc_embedding: ", torch.abs(pc_embedding - pc_embedding_ac).mean().item())
                 # print("mean value in pc_embedding: ", pc_embedding.mean().item())
                 # print("mean value in ac pc_embedding: ", pc_embedding_ac.mean().item())
+
+                # actual_obj_semantics = obs_dict['obs']['obs'][:,-16:]
+                # obs_dict_sem = {
+                #     'obs': obs_dict['obs']['unnorm_obs'][:, :-16],
+                #     'point_cloud': obs_dict['obs']['pointcloud']
+                # }
+
+                # pred_obj_semantics = self.adaption_model(obs_dict_sem, pc_embedding)
+
+                # print("diff in obj_semantics: ", torch.abs(actual_obj_semantics - pred_obj_semantics).mean().item())
                 # pc_embedding = torch.empty_like(
                 #     pc_embedding, device=pc_embedding.device, dtype=torch.float32
                 # ).uniform_(-1.0, 1.0) #ablation test
