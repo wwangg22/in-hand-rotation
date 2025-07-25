@@ -282,9 +282,9 @@ class AllegroArmMOAR(VecTask):
             "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
             "working":[
                 "blue_cup", 
-                # "blue_moon", "blue_tea_box", 
-                # "conditioner", "phillips_screwdriver", "flat_screwdriver",
-                # "remote_controller_1", "repellent"
+                "blue_moon", "blue_tea_box", 
+                "conditioner", "phillips_screwdriver", "flat_screwdriver",
+                "remote_controller_1", "repellent"
             ],
             "translation":[
                 "blue_cup", 
@@ -2746,10 +2746,10 @@ def compute_hand_reward_translate(
     # ---------------------------------------------------------------------- #
     fall = object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)
     timed_out = progress_buf >= max_episode_length - 1
-    resets = torch.where(fall | timed_out,
+    resets = torch.where(fall | timed_out | (object_pos[:,0] < 0.52),
                          torch.ones_like(reset_buf),
                          torch.zeros_like(reset_buf))
-    rew = torch.where(object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist), rew + fall_penalty, rew)
+    rew = torch.where((object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)) | (object_pos[:,0] < 0.52), rew + fall_penalty, rew)
     reset_buf[:] = resets
     rew_buf[:] = rew
 

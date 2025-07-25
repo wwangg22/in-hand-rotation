@@ -44,7 +44,7 @@ env:
   drift_coef: -0.0
   rot_coef: -0.0
   envSpacing: 0.75
-  episodeLength: 500 #200
+  episodeLength: 1000 #200
   enableDebugVis: False
   aggregateMode: 1
   sensorThresh: 1.0
