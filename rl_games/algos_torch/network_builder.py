@@ -232,15 +232,15 @@ class A2CBuilder(NetworkBuilder):
 
                 self.obs_buffer = torch.zeros((num_envs, length, input_shape[0]-32), dtype=torch.float, device="cuda")
 
-                self.adaption_model = MLPwPC(
-                    in_dim = 340 + 32,
-                    hidden_dims = [1024, 1024],
-                    out_dim = 16,              # you hard-coded this
-                ).to("cuda")
+                # self.adaption_model = MLPwPC(
+                #     in_dim = 340 + 32,
+                #     hidden_dims = [1024, 1024],
+                #     out_dim = 16,              # you hard-coded this
+                # ).to("cuda")
 
-                adaption_state_dict = torch.load("adaption_checkpoint_0350.pt", map_location="cuda")
-                self.adaption_model.load_state_dict(adaption_state_dict, strict=True)
-                self.adaption_model.eval()
+                # adaption_state_dict = torch.load("adaption_checkpoint_1300.pt", map_location="cuda")
+                # self.adaption_model.load_state_dict(adaption_state_dict, strict=True)
+                # self.adaption_model.eval()
 
             if self.has_cnn:
                 if self.permute_input:
@@ -342,35 +342,33 @@ class A2CBuilder(NetworkBuilder):
                 else:
                     sigma_init(self.sigma.weight)  
 
-        def forward(self, obs_dict):
+        def forward(self, obs_dict, pc_embed= None):
             if isinstance(obs_dict['obs'], dict):
                 obs = obs_dict['obs']['obs']
                 # print("OBS SHAPE: ", obs.shape)
                 # print("pointcloud shape: ", obs_dict['obs']['pointcloud'].shape)
                 # print("test shape: ", obs_dict['obs']['test'].shape)
                 pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['test'])
+                if pc_embed is None:
 
-                self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
-                self.pc_buffer[:, -1] = obs_dict['obs']['pointcloud']
-                # print('shape of obs_dict pc' , obs_dict['obs']['pointcloud'].shape)
-                # print('mean value in point cloud : ' , self.pc_buffer.mean().item())
+                    self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
+                    self.pc_buffer[:, -1] = obs_dict['obs']['pointcloud']
+                    # print('shape of obs_dict pc' , obs_dict['obs']['pointcloud'].shape)
+                    # print('mean value in point cloud : ' , self.pc_buffer.mean().item())
 
-                self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
-                self.obs_buffer[:, -1] = obs_dict['obs']['unnorm_obs']
+                    self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
+                    self.obs_buffer[:, -1] = obs_dict['obs']['unnorm_obs']
 
-                # # print("mean value in obs : ", self.obs_buffer.mean().item())
+                    # # print("mean value in obs : ", self.obs_buffer.mean().item())
 
-                trans_obs = {
-                    'obs': self.obs_buffer,
-                    'point_cloud': self.pc_buffer
-                }
+                    trans_obs = {
+                        'obs': self.obs_buffer,
+                        'point_cloud': self.pc_buffer
+                    }
 
-                with torch.no_grad():
-                    pc_embedding_ac = self.transformer(trans_obs).mean.mean(dim=1)
+                    with torch.no_grad():
+                        pc_embedding_ac = self.transformer(trans_obs).mean.mean(dim=1)
 
-                # print("diff in pc_embedding: ", torch.abs(pc_embedding - pc_embedding_ac).mean().item())
-                # print("mean value in pc_embedding: ", pc_embedding.mean().item())
-                # print("mean value in ac pc_embedding: ", pc_embedding_ac.mean().item())
 
                 # actual_obj_semantics = obs_dict['obs']['unnorm_obs'][:,-16:]
                 # obs_dict_sem = {
@@ -379,12 +377,21 @@ class A2CBuilder(NetworkBuilder):
                 # }
 
                 # pred_obj_semantics = self.adaption_model(obs_dict_sem, pc_embedding)
+                # print("shape of actual_obj_semantics: ", actual_obj_semantics.shape)
+                # print("shape of pred_obj_semantics: ", pred_obj_semantics.shape)
 
                 # print("diff in obj_semantics: ", torch.abs(actual_obj_semantics - pred_obj_semantics).mean().item())
+                # print(torch.argsort(torch.abs(actual_obj_semantics[0] - pred_obj_semantics[0]), descending=True).tolist()) 
+                # print("pred obj_semantics: ", pred_obj_semantics)
                 # pc_embedding = torch.empty_like(
                 #     pc_embedding, device=pc_embedding.device, dtype=torch.float32
                 # ).uniform_(-1.0, 1.0) #ablation test
                 # print(pc_embedding.shape)
+                else:
+                    pc_embedding_ac = pc_embed 
+                print("diff in pc_embedding: ", torch.abs(pc_embedding - pc_embedding_ac).mean().item())
+                print("mean value in pc_embedding: ", pc_embedding.mean().item())
+                print("mean value in ac pc_embedding: ", pc_embedding_ac.mean().item())
                 obs = torch.cat([obs, pc_embedding_ac], dim=-1)
             else:
                 obs = obs_dict['obs']

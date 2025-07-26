@@ -349,6 +349,37 @@ class ModelA2CContinuousLogStd(BaseModel):
             BaseModelNetwork.__init__(self, **kwargs)
             self.a2c_network = a2c_network
             self.frame_count = 0
+            from rl_games.algos_torch.visual_tactile_transformer import OrderedSemanticsTransformer
+            DEFAULTS = dict(
+                    hidden_dim      = 80,      # transformer inner size
+                    repr_dim        = 80,       # point-cloud embedding size
+                    sem_dim         = 32,       # pc_embedding target size (= act_dim)
+                    lr              = 1e-4,
+                    steps           = 20_000,   # optimisation steps, not epochs
+                    batch_size      = 256,       # episodes per update
+                    frames_per_ep   = 12,        # timesteps sampled per episode
+                    log_every       = 25,
+                )
+
+            state_dict = torch.load("adaption_trans_checkpoint_0250.pt", map_location="cuda")
+            self.transformer = OrderedSemanticsTransformer(
+                repr_dim = DEFAULTS['repr_dim'],
+                act_dim  = DEFAULTS['sem_dim'] + 16,
+                hidden_dim = DEFAULTS['hidden_dim'],
+                num_feat_per_step = 1,              # you hard-coded this
+                policy_head = "gmm",      # or "gmm" for GMM output
+            ).to("cuda")
+
+            self.transformer.load_state_dict(state_dict, strict=True)
+
+            print("transformer in!")
+            self.transformer.eval()
+            num_envs = 64
+            length = DEFAULTS['frames_per_ep']
+            self.pc_buffer = torch.zeros((num_envs, length, 808, 6), dtype=torch.float, device="cuda")
+
+            self.obs_buffer = torch.zeros((num_envs, length, 356), dtype=torch.float, device="cuda")
+
 
         def is_rnn(self):
             return self.a2c_network.is_rnn()
@@ -360,6 +391,27 @@ class ModelA2CContinuousLogStd(BaseModel):
             is_train = input_dict.get('is_train', True)
             prev_actions = input_dict.get('prev_actions', None)
 
+            
+            self.pc_buffer[:, :-1] = self.pc_buffer[:, 1:]
+            self.pc_buffer[:, -1] = input_dict['obs']['pointcloud']
+
+            self.obs_buffer[:, :-1] = self.obs_buffer[:, 1:]
+            self.obs_buffer[:, -1] = input_dict['obs']['obs']
+
+            trans_obs = {
+                    'obs': self.obs_buffer,
+                    'point_cloud': self.pc_buffer
+            }
+
+            pc_embedding_ac = self.transformer(trans_obs).mean[:, -1, :]
+            print("diff in obj_semantics: ", torch.abs(input_dict['obs']['obs'][:,-16:] - pc_embedding_ac[:, -16:]).mean().item())
+            #print(torch.argsort(torch.abs(actual_obj_semantics[0] - pred_obj_semantics[0]), descending=True).tolist())
+            print(torch.argsort(torch.abs(input_dict['obs']['obs'][0,-16:] - pc_embedding_ac[0, -16:]), descending=True).tolist())
+
+
+            input_dict['obs']['obs'][:,-16:] = pc_embedding_ac[:, -16:]
+
+
             if isinstance(input_dict['obs'], dict):
                 input_dict['obs']['unnorm_obs'] = input_dict['obs']['obs']
                 input_dict['obs']['obs'] = self.norm_obs(input_dict['obs']['obs'])
@@ -368,7 +420,7 @@ class ModelA2CContinuousLogStd(BaseModel):
                 input_dict['obs'] = self.norm_obs(input_dict['obs'])
             # print('input dict keys :', input_dict['obs'].keys())
            
-            mu, logstd, value, states, pc_embedding = self.a2c_network(input_dict)
+            mu, logstd, value, states, pc_embedding = self.a2c_network(input_dict, pc_embed = pc_embedding_ac[:, :-16])
             # mu, logstd, value, states = self.a2c_network(input_dict)
             
             sigma = torch.exp(logstd)

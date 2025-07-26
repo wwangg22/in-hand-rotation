@@ -63,14 +63,14 @@ class Actor(nn.Module):
             )
         )
         
-        if policy_head == "deterministic":
-            self._action_head = DeterministicHead(
-                hidden_dim, self._act_dim, hidden_size=hidden_dim, num_layers=2
-            )
-        elif policy_head == "gmm":
-            self._action_head = GMMHead(
-                hidden_dim, self._act_dim, hidden_size=hidden_dim, num_layers=2
-            )
+        # if policy_head == "deterministic":
+        #     self._action_head = DeterministicHead(
+        #         hidden_dim, self._act_dim, hidden_size=hidden_dim, num_layers=2
+        #     )
+        # elif policy_head == "gmm":
+        #     self._action_head = GMMHead(
+        #         hidden_dim, self._act_dim, hidden_size=hidden_dim, num_layers=2
+        #     )
 
         self.apply(weight_init)
 
@@ -232,6 +232,113 @@ class ObjectSemanticsTransformer(nn.Module):
             "loss":        loss.item(),     # float
             "mse":         mse.item(),      # float
         }
+
+class OrderedSemanticsTransformer(nn.Module):
+    def __init__(self, repr_dim, act_dim, hidden_dim, num_feat_per_step=1, policy_head="deterministic"):
+        super().__init__()
+        self._repr_dim = repr_dim + 48 # 48 is the size of the prioperception + tactile stuff
+        self._act_dim = act_dim
+        self._hidden_dim = hidden_dim + 48
+        self._num_feat_per_step = num_feat_per_step
+
+        self.pc_encoder = PointNet(point_channel=6, output_dim=repr_dim) #48 is the size of the prioperception + tactile stuff
+
+        self._transformer = Actor(
+            repr_dim=self._repr_dim,
+            act_dim=act_dim,
+            hidden_dim=self._hidden_dim,
+            policy_type="gpt",
+            policy_head="deterministic",
+            num_feat_per_step=num_feat_per_step,
+        )
+        if policy_head == "deterministic":
+            self.semantics_head = DeterministicHead(
+                    input_size=self._hidden_dim, output_size=self._act_dim, hidden_size=self._hidden_dim, num_layers=2
+                )
+        elif policy_head == "gmm":
+            self.semantics_head = GMMHead(
+                    input_size=self._hidden_dim, output_size=self._act_dim, hidden_size=self._hidden_dim, num_layers=2
+                )
+        else:
+            raise ValueError(f"Unknown policy head type: {policy_head}")
+        
+
+
+    def forward(self, obs):
+        # obs: (B, L, D)  no positional embeddings
+        # N is the history length
+        low_dim_obs = obs['obs'] 
+        # (B, N, 356)
+        pc_obs = obs['point_cloud']
+        # print("pc_obs shape: ", pc_obs.shape)
+        # (B, N, 808, 6)
+        B, N, P, C = pc_obs.shape
+
+        pc_obs = pc_obs.view(B * N, P, C)
+
+        #so we dont want to mess with the actual observation size returned by the env,
+        # but we can extract the information and build our feature vec
+
+        # the observation is as follows:
+        # index range  |  size | description
+        # [  0 :  5 ]  #   6   = arm-base joint positions  (always forced to 0.0 for actor)
+        # [  6 : 21 ]  #  16   = current finger joint positions (unscaled, ±0.06 noise added)
+        # [ 22 : 28 ]  #   7   = **blank / masked** velocity & F-T slots (kept at 0.0)
+        # [ 29 : 44 ]  #  16   = previous-target finger positions (unscaled)
+        # [ 45 : 60 ]  #  16   = sensed contacts (binary/noisy) → fingertips + selected sensors
+        # [ 61 : 84 ]  #  24   = spin-axis helpers (8 fingers × 3-vector, fixed)
+
+        # we only need current finger joint positions, previous-target finger positions, and sensed contacts
+
+        prio_perception = torch.concat( [low_dim_obs[:, :, 6:22], low_dim_obs[:, :, 29:45]], dim=-1)
+
+        binary_contacts = low_dim_obs[:, :, 45:61] # 16 sensed contacts
+
+        pc_feat, _ = self.pc_encoder(pc_obs) # (B* N, repr_dim - 48)
+        pc_feat = pc_feat.view(B, N, -1) # (B, N, repr_dim - 48)
+
+        features = torch.concat(
+            [prio_perception, binary_contacts, pc_feat], dim=-1
+        ).to(low_dim_obs.device) # (B, N, repr_dim)
+        # print("features shape: ", features.shape)
+
+        features = self._transformer(features)
+        pred_semantics = self.semantics_head(features)
+        return pred_semantics
+    
+    def update(self, obs, target, optimizer=None, reduction="mean"):
+        """
+        Parameters
+        ----------
+        obs      : dict with keys 'obs' and 'point_cloud'
+        target   : tensor of target embeddings, same shape as dist.mean
+        optimizer: torch.optim.Optimizer or None  (step only if provided)
+        reduction: 'mean' | 'sum' | 'none'  (passed to head.loss_fn)
+
+        Returns
+        -------
+        dict with scalar metrics   (loss, mse) on CPU.
+        """
+        dist      = self.forward(obs)                          # Distribution
+        loss_dict = self.semantics_head.loss_fn(
+            dist, target, reduction=reduction
+        )
+        loss = loss_dict["actor_loss"]                         # scalar tensor
+
+        if optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+
+        with torch.no_grad():
+            mse = ((dist.mean - target) ** 2).mean()
+
+        return {
+            "loss_tensor": loss,            # keep for back‑prop if needed
+            "loss":        loss.item(),     # float
+            "mse":         mse.item(),      # float
+        }
+
 
 class MLPwPC(nn.Module):
     """
