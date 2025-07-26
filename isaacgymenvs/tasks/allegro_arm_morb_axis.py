@@ -2888,11 +2888,11 @@ def compute_hand_reward_finger(
     if object_set_id == "working" or object_set_id == "custom":
         axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
         z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
-        resets = torch.where(z_val > 0.5 , torch.ones_like(reset_buf), resets)
+        resets = torch.where(z_val > 0.35 , torch.ones_like(reset_buf), resets)
     
-    if object_set_id == "working":
-        z_reward = object_pos[:, ..., 2] - 0.22
-        reward = torch.where(z_reward >0 , reward + 0.10, reward) # z axis reward
+    # if object_set_id == "working":
+    #     z_reward = object_pos[:, ..., 2] - 0.22
+    #     reward = torch.where(z_reward >0 , reward + 0.10, reward) # z axis reward
 
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_corand_floatsnsecutive_successes > 0
