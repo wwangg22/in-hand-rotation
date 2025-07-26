@@ -9,6 +9,7 @@ import functools
 from typing import List, Tuple
 
 from rl_games.algos_torch.visual_tactile_transformer import OrderedSemanticsTransformer
+from rl_games.algos_torch.network_builder import ObjectEncoder
 class EpisodeDataset:
     """
     Loads full tensors only when they are actually needed, keeps none.
@@ -156,7 +157,7 @@ def _preproc_obs( obs_batch):
             obs_batch = obs_batch.float() / 255.0
     return obs_batch
 
-ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-rot-working-obj-only_ep_18000_rew_393.59058.pth"
+ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc_ep_15000_rew_804.91046.pth"
 
 @functools.lru_cache(maxsize=None)
 def load_vertices(fname: str) -> torch.Tensor:
@@ -190,7 +191,7 @@ def main(cfg):
     # ❷ model ------------------------------------------------------------
     model = OrderedSemanticsTransformer(
         repr_dim = cfg.repr_dim,
-        act_dim  = cfg.sem_dim + 16,
+        act_dim  = cfg.sem_dim + 32,
         hidden_dim = cfg.hidden_dim,
         num_feat_per_step = 1,              # you hard-coded this
         policy_head = "gmm",      # or "gmm" for GMM output
@@ -198,15 +199,25 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    # model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
-    # model.load_state_dict(model_ckpt, strict=True)
+    model_ckpt = torch.load("adaption_trans_checkpoint_0150.pt", map_location=device)
+    model.load_state_dict(model_ckpt, strict=True)
 
     prefix   = "a2c_network.pc_encoder."
     pc_state = {k[len(prefix):]: v for k, v in ckpt["model"].items()
                 if k.startswith(prefix)}
     
-    pc_encoder = PointNet(point_channel=3, output_dim=32)
+    pc_encoder = PointNet(point_channel=3, output_dim=32).to(device)
 
+    obj_encoder = ObjectEncoder(
+        in_dim= 16,
+        latent_dim=32
+    ).to(device)
+
+    prefix2   = "a2c_network.object_enc."
+    pc_state2 = {k[len(prefix2):]: v for k, v in ckpt["model"].items()
+                if k.startswith(prefix2)}
+    
+    obj_encoder.load_state_dict(pc_state2)
     
     missing, unexpected = pc_encoder.load_state_dict(pc_state, strict=True)
 
@@ -247,14 +258,16 @@ def main(cfg):
             for item in batch['asset']:                              # B items
                 mesh_path = os.path.join(
                     "assets/urdf/objects/meshes/custom", item, "textured.obj")
-                verts = load_vertices(mesh_path)                     # vertices cached
+                verts = load_vertices(mesh_path).to(device)                     # vertices cached
                 emb   = pointnet_embed(verts, pc_encoder)            # NEW embed
                 fresh_list.append(emb)
+            
+            teacher_enc = obj_encoder(teacher_sem.view(-1, 16)).view(-1, cfg.frames, 32)
             
             fresh = torch.stack(fresh_list).to(device)               # (B,D)
             fresh = fresh.unsqueeze(1).repeat(1, cfg.frames, 1)      # (B,F,D)
 
-            fresh = torch.cat([fresh, teacher_sem], dim=-1)
+            fresh = torch.cat([fresh, teacher_enc], dim=-1)
             
             info2 = model.update({'obs': obs_low, 'point_cloud': pc},
                              fresh,

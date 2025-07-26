@@ -227,7 +227,7 @@ class DistillCollector:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.is_testing = is_testing
-        self.current_learning_iteration = 52
+        self.current_learning_iteration = 56
 
         self.apply_reset = apply_reset
         self.teacher_resume = teacher_resume
@@ -355,7 +355,7 @@ class DistillCollector:
             ep_infos = []
 
             storage = {'obs': [], 'teacher_obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [],
-                       'pc_embedding': [], 'done': [], 'env_id': [], 'assets': self.vec_env.env.assets_buf}  # , 'pointcloud': []}
+                       'latent_vec': [], 'done': [], 'env_id': [], 'assets': self.vec_env.env.assets_buf}  # , 'pointcloud': []}
 
             # Rollout
             for i in range(self.num_transitions_per_env):
@@ -381,14 +381,14 @@ class DistillCollector:
                     teacher_actions = res_dict['actions']
                     teacher_mus = res_dict['mus']
                     teacher_sigmas = res_dict['sigmas']
-                    teacher_embedding = res_dict['pc_embedding']
+                    teacher_embedding = res_dict['latent_vec']
                     # print('mean value in teacher embedding: ', teacher_embedding.mean().item())
 
                     # storage['obs'].extend(current_obs['obs']['student_obs'])
                     # storage['actions'].extend(teacher_mus)
                     # storage['sigmas'].extend(teacher_sigmas)
                     # storage['pointcloud'].extend(current_obs['obs']['pointcloud'])
-                    # storage['pc_embedding'].extend(teacher_embedding)
+                    # storage['latent_vec'].extend(teacher_embedding)
 
 
 
@@ -403,7 +403,7 @@ class DistillCollector:
                         storage['actions']    .append(teacher_mus[env_i])
                         storage['sigmas']     .append(teacher_sigmas[env_i])
                         storage['pointcloud'] .append(current_obs['obs']['pointcloud'][env_i])
-                        storage['pc_embedding'].append(teacher_embedding[env_i])
+                        storage['latent_vec']  .append(teacher_embedding[env_i])
                         storage['done']       .append(dones[env_i].clone())
                         storage['env_id']     .append(torch.tensor(env_i, dtype=torch.long, device=self.device))    
 
@@ -434,7 +434,7 @@ class DistillCollector:
                         storage[key] = torch.stack(storage[key], dim=0)
                         print(storage[key].shape)
                     save_dir = os.path.join(self.teacher_data_dir, "teacher_batch_{}_{}_{}.pt".format(self.worker_id, it, int((i-199)/200)))
-                    torch.save((storage['obs'], storage['teacher_obs'], storage['actions'], storage['sigmas'], storage['pointcloud'], storage['pc_embedding'], storage['done'], storage['env_id'], storage['assets']),save_dir)  
-                    storage = {'obs': [], 'teacher_obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [], 'pc_embedding': [], 'done': [], 'env_id': [], 'assets': self.vec_env.env.assets_buf}  # , 'pointcloud': []
+                    torch.save((storage['obs'], storage['teacher_obs'], storage['actions'], storage['sigmas'], storage['pointcloud'], storage['latent_vec'], storage['done'], storage['env_id'], storage['assets']),save_dir)  
+                    storage = {'obs': [], 'teacher_obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [], 'latent_vec': [], 'done': [], 'env_id': [], 'assets': self.vec_env.env.assets_buf}  # , 'pointcloud': []
                     reward_sum = []
                     episode_length = []
