@@ -11,7 +11,6 @@ task.env.numEnvs=2 train.params.config.minibatch_size=1 \
 train.params.config.central_value_config.minibatch_size=1 \
 task.env.observationType=full_stack_obj_sem task.env.legacy_obs=False \
 test=True \
-checkpoint=${CKPT} \
 task.env.ablation_mode=no-pc experiment=z-axis-working \
 wandb_activate=False \
 ${EXTRA_ARGS}

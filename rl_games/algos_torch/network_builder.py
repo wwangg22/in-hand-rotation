@@ -168,6 +168,61 @@ class NetworkBuilder:
                     layers.append(torch.nn.BatchNorm2d(in_channels))  
             return nn.Sequential(*layers)
 
+class ObjectEncoder(nn.Module):
+    """
+    Tiny MLP that turns a flat vector of privileged state features
+    (pose, velocity, mass, inertia, …) into a bounded latent z.
+
+    Args
+    ----
+    in_dim : int
+        Number of input scalars.
+    latent_dim : int, optional
+        Size of the encoded embedding (default: 32).
+    hidden_dims : tuple[int], optional
+        Hidden‑layer sizes (default: (128, 64)).
+    activation : nn.Module, optional
+        Non‑linearity to use after each linear layer (default: nn.ReLU).
+    dropout : float, optional
+        Dropout probability applied after activations (default: 0.0).
+    use_layernorm : bool, optional
+        Insert LayerNorm after each linear layer (default: True).
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        latent_dim: int = 32,
+        hidden_dims = (128, 64),
+        activation=nn.ReLU,
+        dropout: float = 0.0,
+        use_layernorm: bool = True,
+    ):
+        super().__init__()
+
+        layers = []
+        prev_dim = in_dim
+        for h in hidden_dims:
+            layers.append(nn.Linear(prev_dim, h))
+            if use_layernorm:
+                layers.append(nn.LayerNorm(h))
+            layers.append(activation())
+            if dropout > 0.0:
+                layers.append(nn.Dropout(dropout))
+            prev_dim = h
+
+        # final projection → latent and bound it to [‑1, 1] via tanh
+        layers.append(nn.Linear(prev_dim, latent_dim))
+        layers.append(nn.Tanh())
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x : (B, in_dim) tensor
+        returns : (B, latent_dim) tensor
+        """
+        return self.net(x)
 
 class A2CBuilder(NetworkBuilder):
     def __init__(self, **kwargs):
@@ -191,7 +246,7 @@ class A2CBuilder(NetworkBuilder):
             
             if isinstance(input_shape, dict):
                 #print(params.keys())
-                input_shape = (input_shape['obs'][0] + 32,)
+                input_shape = (input_shape['obs'][0] + 32 + 16,) # 16 more from latent_dim - in_dim
                 #if params.pointnet == "medium":
                 #    self.pc_encoder = PointNetMedium(point_channel=5)
                 #elif params.pointnet == "large":
@@ -199,6 +254,10 @@ class A2CBuilder(NetworkBuilder):
                 #else:
                 print("Creating PointNet with point_channel=3")
                 self.pc_encoder = PointNet(point_channel=3, output_dim=32) #6)
+                self.object_enc = ObjectEncoder(
+                    in_dim = 16,
+                    latent_dim = 32,
+                )
 
             if self.has_cnn:
                 if self.permute_input:
@@ -302,11 +361,18 @@ class A2CBuilder(NetworkBuilder):
 
         def forward(self, obs_dict):
             if isinstance(obs_dict['obs'], dict):
+                #create a torch tensor with shape obs_dict but add 16 dim on the last dimension
+                obs_shape = list(obs_dict['obs']['obs'].shape)
+                obs_shape[-1] += 16
+                new_obs = torch.zeros(*obs_shape, device=obs_dict['obs']['obs'].device, dtype=obs_dict['obs']['obs'].dtype)
                 obs = obs_dict['obs']['obs']
+                new_obs[:, :-32] = obs[:, :-16]
+                
+                new_obs[:, -32:] = self.object_enc(obs[:, -16:])
                 # print(obs.shape, obs_dict['obs']['pointcloud'].shape)
                 pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['pointcloud'])
                 # print(pc_embedding.shape)
-                obs = torch.cat([obs, pc_embedding], dim=-1)
+                obs = torch.cat([new_obs, pc_embedding], dim=-1)
             else:
                 obs = obs_dict['obs']
             states = obs_dict.get('rnn_states', None)
