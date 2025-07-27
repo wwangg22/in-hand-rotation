@@ -283,7 +283,6 @@ class AllegroArmMOAR(VecTask):
             "working":[
                 "blue_cup", 
                 "blue_moon", "blue_tea_box", 
-                "conditioner", "phillips_screwdriver", "flat_screwdriver",
                 "remote_controller_1", "repellent"
             ],
             "translation":[
