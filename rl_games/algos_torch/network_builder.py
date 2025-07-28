@@ -246,7 +246,7 @@ class A2CBuilder(NetworkBuilder):
             
             if isinstance(input_shape, dict):
                 #print(params.keys())
-                input_shape = (input_shape['obs'][0] + 32 + 16,) # 16 more from latent_dim - in_dim
+                input_shape = (input_shape['obs'][0] + 32,) # 16 more from latent_dim - in_dim
                 #if params.pointnet == "medium":
                 #    self.pc_encoder = PointNetMedium(point_channel=5)
                 #elif params.pointnet == "large":
@@ -256,7 +256,7 @@ class A2CBuilder(NetworkBuilder):
                 self.pc_encoder = PointNet(point_channel=3, output_dim=32) #6)
                 self.object_enc = ObjectEncoder(
                     in_dim = 16,
-                    latent_dim = 32,
+                    latent_dim = 8,
                 )
 
             if self.has_cnn:
@@ -363,12 +363,11 @@ class A2CBuilder(NetworkBuilder):
             if isinstance(obs_dict['obs'], dict):
                 #create a torch tensor with shape obs_dict but add 16 dim on the last dimension
                 obs_shape = list(obs_dict['obs']['obs'].shape)
-                obs_shape[-1] += 16
                 new_obs = torch.zeros(*obs_shape, device=obs_dict['obs']['obs'].device, dtype=obs_dict['obs']['obs'].dtype)
                 obs = obs_dict['obs']['obs']
-                new_obs[:, :-32] = obs[:, :-16]
+                new_obs[:, :-16] = obs[:, :-16]
                 
-                new_obs[:, -32:] = self.object_enc(obs[:, -16:])
+                new_obs[:, -16:-8] = self.object_enc(obs[:, -16:])
                 # print(obs.shape, obs_dict['obs']['pointcloud'].shape)
                 pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['pointcloud'])
                 # print(pc_embedding.shape)
