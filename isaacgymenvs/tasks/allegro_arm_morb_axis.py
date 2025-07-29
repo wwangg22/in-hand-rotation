@@ -281,8 +281,7 @@ class AllegroArmMOAR(VecTask):
                   'set_obj16_cylinder_axis'],
             "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
             "working":[
-                "blue_cup", 
-                "blue_moon", "blue_tea_box", 
+                "blue_cup", "blue_tea_box", 
                 "remote_controller_1", "repellent"
             ],
             "translation":[
@@ -2884,10 +2883,10 @@ def compute_hand_reward_finger(
     else:
         resets = torch.where(deviation < 0, torch.ones_like(reset_buf), resets)
 
-    # if object_set_id == "working" or object_set_id == "custom":
-    #     axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
-    #     z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
-    #     resets = torch.where(z_val > 0.35 , torch.ones_like(reset_buf), resets)
+    if object_set_id == "working" or object_set_id == "custom":
+        axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
+        z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
+        resets = torch.where(z_val > 0.41 , torch.ones_like(reset_buf), resets)
     
     # if object_set_id == "working":
     #     z_reward = object_pos[:, ..., 2] - 0.22
