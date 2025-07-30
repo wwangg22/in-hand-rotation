@@ -10,6 +10,7 @@ from typing import List, Tuple
 
 from rl_games.algos_torch.visual_tactile_transformer import OrderedSemanticsTransformer
 from rl_games.algos_torch.network_builder import ObjectEncoder
+from rl_games.algos_torch.running_mean_std import RunningMeanStd
 class EpisodeDataset:
     """
     Loads full tensors only when they are actually needed, keeps none.
@@ -109,7 +110,7 @@ class EpisodeDataset:
 
     def sample(self, batch_size: int, frames_per_episode: int):
         keys  = ["obs", "teacher_obs", "actions", "sigmas",
-                 "pointcloud", "pc_embedding", "done", "env_id"]
+                 "pointcloud", "done", "env_id"]
         batch = {k: [] for k in keys}
         batch["asset"] = []
 
@@ -137,9 +138,9 @@ DEFAULTS = dict(
     hidden_dim      = 80,      # transformer inner size
     repr_dim        = 80,       # point-cloud embedding size
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
-    lr              = 1e-4,
-    steps           = 4000,   # optimisation steps, not epochs
-    batch_size      = 512,       # episodes per update
+    lr              = 1e-3,
+    steps           = 1000,   # optimisation steps, not epochs
+    batch_size      = 128,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
     log_every       = 50,
 )
@@ -157,7 +158,7 @@ def _preproc_obs( obs_batch):
             obs_batch = obs_batch.float() / 255.0
     return obs_batch
 
-ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc_ep_15000_rew_804.91046.pth"
+ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
 
 @functools.lru_cache(maxsize=None)
 def load_vertices(fname: str) -> torch.Tensor:
@@ -191,7 +192,7 @@ def main(cfg):
     # ❷ model ------------------------------------------------------------
     model = OrderedSemanticsTransformer(
         repr_dim = cfg.repr_dim,
-        act_dim  = cfg.sem_dim + 32,
+        act_dim  = 8, #cfg.sem_dim + 8,
         hidden_dim = cfg.hidden_dim,
         num_feat_per_step = 1,              # you hard-coded this
         policy_head = "gmm",      # or "gmm" for GMM output
@@ -199,7 +200,7 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    model_ckpt = torch.load("adaption_trans_checkpoint_0150.pt", map_location=device)
+    model_ckpt = torch.load("adaption_trans_v2_checkpoint_0200.pt", map_location=device)
     model.load_state_dict(model_ckpt, strict=True)
 
     prefix   = "a2c_network.pc_encoder."
@@ -210,7 +211,7 @@ def main(cfg):
 
     obj_encoder = ObjectEncoder(
         in_dim= 16,
-        latent_dim=32
+        latent_dim=8
     ).to(device)
 
     prefix2   = "a2c_network.object_enc."
@@ -218,7 +219,15 @@ def main(cfg):
                 if k.startswith(prefix2)}
     
     obj_encoder.load_state_dict(pc_state2)
-    
+    obj_encoder.eval()  # no training on object encoder
+
+    prefix3 = "running_mean_std."
+    pc_state3 = {k[len(prefix3):]: v for k, v in ckpt["model"].items()
+                 if k.startswith(prefix3)}
+
+    normalizer = RunningMeanStd((356,)).to(device)
+    normalizer.load_state_dict(pc_state3)
+
     missing, unexpected = pc_encoder.load_state_dict(pc_state, strict=True)
 
 
@@ -244,7 +253,11 @@ def main(cfg):
         teacher_obs = _preproc_obs(batch['teacher_obs']).to(device)  # (B,F,356)
         pc      = batch['pointcloud'].to(device)                 # (B,F,808,6)
 
-        teacher_sem = teacher_obs[:, :, -16:]  # (B,F,16)
+        with torch.no_grad():
+            teacher_normalized_obs = normalizer(teacher_obs.reshape(-1, 356)).view(
+                cfg.batch, cfg.frames, -1)
+        teacher_sem = teacher_normalized_obs[:, :, -16:]  # (B,F,16)
+        B, F, _ = teacher_sem.shape
 
         # target_stored = batch['pc_embedding'].to(device)         # (B,F,D)
 
@@ -253,25 +266,40 @@ def main(cfg):
         #                      target_stored,
         #                      optimizer=optimiser)
         
-        for j in range(5):
-            fresh_list = []
-            for item in batch['asset']:                              # B items
-                mesh_path = os.path.join(
-                    "assets/urdf/objects/meshes/custom", item, "textured.obj")
-                verts = load_vertices(mesh_path).to(device)                     # vertices cached
-                emb   = pointnet_embed(verts, pc_encoder)            # NEW embed
-                fresh_list.append(emb)
-            
-            teacher_enc = obj_encoder(teacher_sem.view(-1, 16)).view(-1, cfg.frames, 32)
-            
-            fresh = torch.stack(fresh_list).to(device)               # (B,D)
-            fresh = fresh.unsqueeze(1).repeat(1, cfg.frames, 1)      # (B,F,D)
 
-            fresh = torch.cat([fresh, teacher_enc], dim=-1)
-            
-            info2 = model.update({'obs': obs_low, 'point_cloud': pc},
-                             fresh,
-                             optimizer=optimiser)
+        # fresh_list = []
+        # for item in batch['asset']:                              # B items
+        #     mesh_path = os.path.join(
+        #         "assets/urdf/objects/meshes/custom", item, "textured.obj")
+        #     verts = load_vertices(mesh_path).to(device)                     # vertices cached
+        #     emb   = pointnet_embed(verts, pc_encoder)            # NEW embed
+        #     fresh_list.append(emb)
+        
+        teacher_enc = obj_encoder(teacher_sem.reshape(B*F, -1)).view(B, F, -1)
+        
+        # fresh = torch.stack(fresh_list).to(device)               # (B,D)
+        # fresh = fresh.unsqueeze(1).repeat(1, cfg.frames, 1)      # (B,F,D)
+
+        # fresh = torch.cat([fresh, teacher_enc], dim=-1).detach()
+
+        fresh = teacher_enc.detach()
+        
+        info2 = model.update({'obs': obs_low, 'point_cloud': pc},
+                            fresh,
+                            optimizer=optimiser)
+        with torch.no_grad():
+            # Network output distribution from the just‑computed forward pass
+            dist_out = model({'obs': obs_low, 'point_cloud': pc})        # (B,F,40)
+            pred_sem = dist_out.mean                                     # (B,F,40)
+
+            # Δ between first and last timestep
+            d_obj_tgt  = (teacher_enc[:, -1, :] - teacher_enc[:, 0, :]).abs().mean()
+            d_obj_pred = (pred_sem[:, -1, -8:] - pred_sem[:, 0, -8:]).abs().mean()
+
+        print(f"Δ teacher obj_sem  (t0→t{F-1}): {d_obj_tgt:.4f}  |  "
+                # f"Δ teacher mesh: {d_mesh_tgt:.4f}  |  "
+                f"Δ predicted obj_sem: {d_obj_pred:.4f}")
+        
 
     
         # -------- logging & checkpoint -------------------------------
@@ -280,9 +308,10 @@ def main(cfg):
             fps = (2 * cfg.batch * cfg.frames) / max(dt, 1e-5)   # two updates
             print(f"[{step:>6}/{cfg.steps}] "
                   f"loss2={info2['loss']:.5f}  mse2={info2['mse']:.5f} | "
+                  f"mse_obj_sem={info2['mse_obj_sem']:.5f} | "
                   f"fps={fps:,.0f}")
             t0 = time.time()
-            torch.save(model.state_dict(), f"adaption_trans_checkpoint_{step:04d}.pt")
+            torch.save(model.state_dict(), f"adaption_trans_v2_checkpoint_{step:04d}.pt")
             print(f"✓ checkpoint_{step:04d}.pt saved")
 
 # -------------------------------------------------------------------------

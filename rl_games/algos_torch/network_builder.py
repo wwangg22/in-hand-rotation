@@ -292,11 +292,6 @@ class ObjectEncoder(nn.Module):
 
 
             prev_dim = h
-
-
-
-
-
         # final projection → latent and bound it to [‑1, 1] via tanh
 
 
@@ -354,7 +349,7 @@ class A2CBuilder(NetworkBuilder):
             
             if isinstance(input_shape, dict):
                 #print(params.keys())
-                input_shape = (input_shape['obs'][0] + 32 + 16,) # 16 more from latent_dim - in_dim
+                input_shape = (input_shape['obs'][0] + 32,) # 16 more from latent_dim - in_dim
                 print(f'input_shape: {input_shape}')
                 #if params.pointnet == "medium":
                 #    self.pc_encoder = PointNetMedium(point_channel=5)
@@ -366,7 +361,7 @@ class A2CBuilder(NetworkBuilder):
 
                 self.object_enc = ObjectEncoder(
                     in_dim = 16,
-                    latent_dim = 32,
+                    latent_dim = 8,
                 )
                 
                 #test trasnformer
@@ -382,34 +377,34 @@ class A2CBuilder(NetworkBuilder):
                 )
                 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer, MLPwPC
 
-                state_dict = torch.load("checkpoint_1300.pt", map_location="cuda")
-                self.transformer = ObjectSemanticsTransformer(
-                    repr_dim = DEFAULTS['repr_dim'],
-                    act_dim  = DEFAULTS['sem_dim'],
-                    hidden_dim = DEFAULTS['hidden_dim'],
-                    num_feat_per_step = 1,              # you hard-coded this
-                    policy_head = "gmm",      # or "gmm" for GMM output
-                ).to("cuda")
-
-                self.transformer.load_state_dict(state_dict, strict=True)
-
-                print("transformer in!")
-                self.transformer.eval()
-                num_envs = 64
-                length = DEFAULTS['frames_per_ep']
-                self.pc_buffer = torch.zeros((num_envs, length, 808, 6), dtype=torch.float, device="cuda")
-
-                self.obs_buffer = torch.zeros((num_envs, length, input_shape[0]-32), dtype=torch.float, device="cuda")
-
-                # self.adaption_model = MLPwPC(
-                #     in_dim = 340 + 32,
-                #     hidden_dims = [1024, 1024],
-                #     out_dim = 16,              # you hard-coded this
+                # state_dict = torch.load("checkpoint_1300.pt", map_location="cuda")
+                # self.transformer = ObjectSemanticsTransformer(
+                #     repr_dim = DEFAULTS['repr_dim'],
+                #     act_dim  = DEFAULTS['sem_dim'],
+                #     hidden_dim = DEFAULTS['hidden_dim'],
+                #     num_feat_per_step = 1,              # you hard-coded this
+                #     policy_head = "gmm",      # or "gmm" for GMM output
                 # ).to("cuda")
 
-                # adaption_state_dict = torch.load("adaption_checkpoint_1300.pt", map_location="cuda")
-                # self.adaption_model.load_state_dict(adaption_state_dict, strict=True)
-                # self.adaption_model.eval()
+                # self.transformer.load_state_dict(state_dict, strict=True)
+
+                print("transformer in!")
+                # self.transformer.eval()
+                # num_envs = 64
+                # length = DEFAULTS['frames_per_ep']
+                # self.pc_buffer = torch.zeros((num_envs, length, 808, 6), dtype=torch.float, device="cuda")
+
+                # self.obs_buffer = torch.zeros((num_envs, length, input_shape[0]-32), dtype=torch.float, device="cuda")
+
+                self.adaption_model = MLPwPC(
+                    in_dim = 340 + 32,
+                    hidden_dims = [1024, 1024],
+                    out_dim = 8,              # you hard-coded this
+                ).to("cuda")
+
+                adaption_state_dict = torch.load("adaption_checkpoint_0050.pt", map_location="cuda")
+                self.adaption_model.load_state_dict(adaption_state_dict, strict=True)
+                self.adaption_model.eval()
 
             if self.has_cnn:
                 if self.permute_input:
@@ -514,12 +509,17 @@ class A2CBuilder(NetworkBuilder):
         def forward(self, obs_dict, pc_embed= None, obj_sem=None):
             if isinstance(obs_dict['obs'], dict):
                 obs_shape = list(obs_dict['obs']['obs'].shape)
-                obs_shape[-1] += 16
+                # obs_shape[-1] += 16
                 new_obs = torch.zeros(*obs_shape, device=obs_dict['obs']['obs'].device, dtype=obs_dict['obs']['obs'].dtype)
                 obs = obs_dict['obs']['obs']
-                new_obs[:, :-32] = obs[:, :-16]
+                # new_obs[:, :-32] = obs[:, :-16]
+                new_obs[:, :-16] = obs[:, :-16]
                 latent_vec = self.object_enc(obs[:, -16:])
-                new_obs[:, -32:] = obj_sem if obj_sem is not None else latent_vec
+                # new_obs[:, -32:] = obj_sem if obj_sem is not None else latent_vec
+                # if obj_sem is not None:
+                #     print('diff between obj_sem and latent_vec: ', torch.abs(obj_sem - latent_vec).mean().item())\
+                    
+
 
                 # print("obj sem and latent vec difference: ", torch.abs(obj_sem - latent_vec).mean().item())
 
@@ -527,6 +527,20 @@ class A2CBuilder(NetworkBuilder):
                 # print("pointcloud shape: ", obs_dict['obs']['pointcloud'].shape)
                 # print("test shape: ", obs_dict['obs']['test'].shape)
                 pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['test'])
+                obs_dict_sem = {
+                    'obs': obs_dict['obs']['unnorm_obs'][:, :-16],
+                    'point_cloud': obs_dict['obs']['pointcloud']
+                }
+
+                pred_obj_semantics = self.adaption_model(obs_dict_sem, pc_embed)
+                # print("shape of actual_obj_semantics: ", latent_vec.shape)
+                # print("shape of pred_obj_semantics: ", pred_obj_semantics.shape)
+
+                print("diff in obj_semantics: ", torch.abs(latent_vec - pred_obj_semantics).mean().item())
+
+                new_obs[:, -16:-8] = pred_obj_semantics #latent_vec #obj_sem if obj_sem is not None else latent_vec
+
+                # print("pc embedding vs pc_embed difference: ", torch.abs(pc_embedding - pc_embed).mean().item())
                 if pc_embed is None:
                     pass
 
@@ -549,17 +563,6 @@ class A2CBuilder(NetworkBuilder):
                     #     pc_embedding_ac = self.transformer(trans_obs).mean.mean(dim=1)
 
 
-                # actual_obj_semantics = obs_dict['obs']['unnorm_obs'][:,-16:]
-                # obs_dict_sem = {
-                #     'obs': obs_dict['obs']['unnorm_obs'][:, :-16],
-                #     'point_cloud': obs_dict['obs']['pointcloud']
-                # }
-
-                # pred_obj_semantics = self.adaption_model(obs_dict_sem, pc_embedding)
-                # print("shape of actual_obj_semantics: ", actual_obj_semantics.shape)
-                # print("shape of pred_obj_semantics: ", pred_obj_semantics.shape)
-
-                # print("diff in obj_semantics: ", torch.abs(actual_obj_semantics - pred_obj_semantics).mean().item())
                 # print(torch.argsort(torch.abs(actual_obj_semantics[0] - pred_obj_semantics[0]), descending=True).tolist()) 
                 # print("pred obj_semantics: ", pred_obj_semantics)
                 # pc_embedding = torch.empty_like(
@@ -571,7 +574,7 @@ class A2CBuilder(NetworkBuilder):
                 # print("diff in pc_embedding: ", torch.abs(pc_embedding - pc_embedding_ac).mean().item())
                 # print("mean value in pc_embedding: ", pc_embedding.mean().item())
                 # print("mean value in ac pc_embedding: ", pc_embedding_ac.mean().item())
-                obs = torch.cat([new_obs, pc_embedding], dim=-1)
+                obs = torch.cat([new_obs, pc_embedding_ac], dim=-1)
             else:
                 obs = obs_dict['obs']
                 latent_vec = None

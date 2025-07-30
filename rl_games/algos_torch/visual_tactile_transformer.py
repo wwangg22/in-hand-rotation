@@ -332,11 +332,13 @@ class OrderedSemanticsTransformer(nn.Module):
 
         with torch.no_grad():
             mse = ((dist.mean - target) ** 2).mean()
+            mse_obj_sem = (torch.abs(dist.mean[:, -1, -8:] - target[:, -1, -8:])).mean()  # mse for the last 32 dimensions (object semantics)
 
         return {
             "loss_tensor": loss,            # keep for back‑prop if needed
             "loss":        loss.item(),     # float
             "mse":         mse.item(),      # float
+            "mse_obj_sem": mse_obj_sem.item(),  # float
         }
 
 

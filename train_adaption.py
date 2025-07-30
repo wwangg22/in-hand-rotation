@@ -10,6 +10,8 @@ from typing import List, Tuple
 
 from rl_games.algos_torch.visual_tactile_transformer import ObjectSemanticsTransformer
 from rl_games.algos_torch.running_mean_std import RunningMeanStd
+from rl_games.algos_torch.network_builder import ObjectEncoder
+
 class EpisodeDataset:
     """
     Loads full tensors only when they are actually needed, keeps none.
@@ -95,7 +97,7 @@ class EpisodeDataset:
 
     def sample(self, batch_size: int):
         keys  = ["obs","teacher_obs","actions","sigmas",
-                 "pointcloud","pc_embedding","done","env_id"]
+                 "pointcloud","done","env_id"]
         batch = {k: [] for k in keys}
         batch["asset"] = []
 
@@ -124,9 +126,9 @@ DEFAULTS = dict(
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
     lr              = 1e-4,
     steps           = 4000,   # optimisation steps, not epochs
-    batch_size      = 128,       # episodes per update
+    batch_size      = 512,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
-    log_every       = 50,
+    log_every       = 25,
 )
 def _preproc_obs( obs_batch):
     import copy
@@ -142,7 +144,7 @@ def _preproc_obs( obs_batch):
             obs_batch = obs_batch.float() / 255.0
     return obs_batch
 
-ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-rot-working-obj-only_ep_18000_rew_393.59058.pth"
+ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
 
 @functools.lru_cache(maxsize=None)
 def load_vertices(fname: str) -> torch.Tensor:
@@ -232,13 +234,27 @@ def main(cfg):
     model = MLPwPC(
         in_dim = 340 + 32,
         hidden_dims = [1024, 1024],
-        out_dim = 16,              # you hard-coded this
+        out_dim = 8,              # you hard-coded this
     ).to(device)
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    # model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
-    # model.load_state_dict(model_ckpt, strict=True)
+    # trans_model = ObjectSemanticsTransformer(
+    #     repr_dim = cfg.repr_dim,
+    #     act_dim  = cfg.sem_dim,
+    #     hidden_dim = cfg.hidden_dim,
+    #     num_feat_per_step = 1,              # you hard-coded this
+    #     policy_head = "gmm",      # or "gmm" for GMM output
+    # ).to(device)
+
+    # trans_ckpt      = torch.load(trans_ckpt_path, map_location=)
+    #     trans_model.load_state_dict(trans_ckpt, strict=True)
+
+
+    model_ckpt = torch.load("latest_mlp.pt", map_location=device)
+    model.load_state_dict(model_ckpt, strict=True)
+
+    
 
     prefix   = "a2c_network.pc_encoder."
     pc_state = {k[len(prefix):]: v for k, v in ckpt["model"].items()
@@ -259,6 +275,17 @@ def main(cfg):
     teacher_normalization = RunningMeanStd((356,)).to(device)
 
     teacher_normalization.load_state_dict(norm_state)
+
+    prefix2   = "a2c_network.object_enc."
+    pc_state2 = {k[len(prefix2):]: v for k, v in ckpt["model"].items()
+                if k.startswith(prefix2)}
+    obj_encoder = ObjectEncoder(
+        in_dim= 16,
+        latent_dim=8
+    ).to(device)
+    
+    obj_encoder.load_state_dict(pc_state2)
+    obj_encoder.eval()  # no training on object encoder
 
     # batch = ds.sample(cfg.batch, cfg.frames)
 
@@ -281,7 +308,9 @@ def main(cfg):
         # target = teacher_normalization(batch['teacher_obs'].to(device))          # (B,356)
         target = batch['teacher_obs'].to(device)          # (B,356)
 
-        target = target[:,  -16:] #only obj semantics
+        with torch.no_grad():
+            target = teacher_normalization(target)          # (B,356)
+            target = obj_encoder(target[:, -16:])
         # target_stored = batch['pc_embedding'].to(device)         # (B,F,D)
 
         # # -------- (1) update on stored embeddings ---------------------
@@ -289,7 +318,7 @@ def main(cfg):
         #                      target_stored,
         #                      optimizer=optimiser)
         
-        for j in range(5):
+        for j in range(3):
             fresh_list = []
             for item in batch['asset']:                              # B items
                 mesh_path = os.path.join(

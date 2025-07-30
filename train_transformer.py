@@ -87,17 +87,18 @@ class EpisodeDataset:
         # apply same permutation to every tensor we care about
         return dict(
             obs         = data[0][order],
-            actions     = data[1][order],
-            sigmas      = data[2][order],
-            pointcloud  = data[3][order],
-            pc_embedding= data[4][order],
-            done        = data[5][order],
-            env_id      = data[6][order]
+            teacher_obs = data[1][order],  # obs and teacher_obs are the same
+            actions     = data[2][order],
+            sigmas      = data[3][order],
+            pointcloud  = data[4][order],
+            pc_embedding= data[5][order],
+            done        = data[6][order],
+            env_id      = data[7][order]
         )
 
     def sample(self, batch_size: int, frames_per_episode: int):
-        keys  = ["obs", "actions", "sigmas",
-                 "pointcloud", "pc_embedding", "done", "env_id"]
+        keys  = ["obs", "teacher_obs", "actions", "sigmas",
+                 "pointcloud", "done", "env_id"]
         batch = {k: [] for k in keys}
         batch["asset"] = []
 
@@ -145,7 +146,7 @@ def _preproc_obs( obs_batch):
             obs_batch = obs_batch.float() / 255.0
     return obs_batch
 
-ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-rot-working-obj-only_ep_18000_rew_393.59058.pth"
+ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
 
 @functools.lru_cache(maxsize=None)
 def load_vertices(fname: str) -> torch.Tensor:
@@ -187,8 +188,8 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
-    model.load_state_dict(model_ckpt, strict=True)
+    # model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
+    # model.load_state_dict(model_ckpt, strict=True)
 
     prefix   = "a2c_network.pc_encoder."
     pc_state = {k[len(prefix):]: v for k, v in ckpt["model"].items()

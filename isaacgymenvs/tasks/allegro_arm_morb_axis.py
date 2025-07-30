@@ -282,8 +282,7 @@ class AllegroArmMOAR(VecTask):
             "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
             "working" : [
                  "blue_cup", 
-                "blue_moon", "blue_tea_box", 
-                "conditioner", "phillips_screwdriver", "flat_screwdriver",
+                "blue_tea_box", 
                 "remote_controller_1", "repellent"
             ],
             "all":["black_marker", "stapler_2", "blue_cup", 
@@ -2635,7 +2634,7 @@ def compute_hand_reward_finger(
     if object_set_id == "working":
         axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
         z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
-        resets = torch.where(z_val > 0.5 , torch.ones_like(reset_buf), resets)
+        resets = torch.where(z_val > 0.42 , torch.ones_like(reset_buf), resets) #5
 
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_corand_floatsnsecutive_successes > 0
