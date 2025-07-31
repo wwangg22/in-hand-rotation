@@ -1799,6 +1799,7 @@ class AllegroArmMOAR(VecTask):
                                     1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
                 self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
                 self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
+                # print("yaw init mean, max,min, std:", yaw_init.mean().item(), yaw_init.max().item(), yaw_init.min().item(), yaw_init.std().item())
             else:
                 self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
 
@@ -2641,6 +2642,43 @@ class AllegroArmMOAR(VecTask):
             condition = True if self.viewer else False
         else:
             condition = False
+        
+        if self.viewer and self.rotation_axis == "baseline":      # draw only for this task
+            self.gym.clear_lines(self.viewer)
+
+            axis_len = 0.20
+            x_local  = torch.tensor([axis_len, 0.0,      0.0], device=self.device)
+            y_local  = torch.tensor([0.0,      axis_len, 0.0], device=self.device)
+            z_local  = torch.tensor([0.0,      0.0,      axis_len], device=self.device)
+
+            for env_id, env_ptr in enumerate(self.envs):
+                # ───────────── target orientation ─────────────
+                q_init = self.object_init_quat[env_id]                      # xyzw
+                dq     = quat_from_angle_axis(self.rotation_target[env_id],
+                                            self.z_unit_tensor[env_id])
+                q_tgt  = quat_mul(dq, q_init)                               # xyzw
+
+                p      = self.object_pos[env_id].cpu().numpy()              # anchor
+
+                Tx, Ty, Tz = (quat_apply(q_tgt, v).cpu().numpy()
+                            for v in (x_local, y_local, z_local))
+
+                self.gym.add_lines(self.viewer, env_ptr, 3,
+                    [*p, *(p+Tx),  *p, *(p+Ty),  *p, *(p+Tz)],
+                    [(1.00, 0.55, 0.25),   # target X  (orange-red)
+                    (0.30, 1.00, 0.30),   # target Y  (lime green)
+                    (0.25, 0.60, 1.00)])  # target Z  (sky blue)
+
+                # ───────────── current orientation ─────────────
+                q_now = self.object_rot[env_id]                             # xyzw
+                Cx, Cy, Cz = (quat_apply(q_now, v).cpu().numpy()
+                            for v in (x_local, y_local, z_local))
+
+                self.gym.add_lines(self.viewer, env_ptr, 3,
+                    [*p, *(p+Cx),  *p, *(p+Cy),  *p, *(p+Cz)],
+                    [(1.00, 0.00, 0.00),   # current X  (pure red)
+                    (0.00, 1.00, 0.00),   # current Y  (pure green)
+                    (0.00, 0.30, 1.00)])  # current Z  (deep blue)
         if condition and self.debug_viz:
             # draw axes on target object
             self.gym.clear_lines(self.viewer)
@@ -2780,6 +2818,9 @@ def compute_hand_reward_baseline(
 
     drift_vec = disp - proj.unsqueeze(-1) * translation_axis
     drift_pen = drift_coef * torch.norm(drift_vec, dim=-1)
+    print("progress_reward ", progress_reward[0])
+
+    print("drift_pen ", drift_pen[0])
 
     # ------------------------------------------------------------ #
     # 2.  Rotation about world-Z                                   #
@@ -2796,20 +2837,22 @@ def compute_hand_reward_baseline(
     yaw_error = angdiff(yaw_delta, rotation_target)     # desired – actual
 
     # smooth, jump-free reward in [-coef, +coef]
-    rot_reward = rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi)
+    rot_reward = (rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi))**2
+    print("rot_reward ", rot_reward[0])
 
     # ------------------------------------------------------------ #
     # 3.  Tilt penalty (rotation about X / Y)                      #
     # ------------------------------------------------------------ #
     #  body +Z in world frame
-    # z_body = torch.zeros((object_rot.size(0), 3),           # (B,3)
-    #                  dtype=object_rot.dtype,
-    #                  device=object_rot.device)
-    # z_body[:, 2] = 1.0
+    z_body = torch.zeros((object_rot.size(0), 3),           # (B,3)
+                     dtype=object_rot.dtype,
+                     device=object_rot.device)
+    z_body[:, 2] = 1.0
 
-    # z_world = torch.bmm(transform.quaternion_to_matrix(xyzw_to_wxyz(object_rot)),
-    #                     z_body.unsqueeze(-1)).squeeze(-1)          # (B,3)
-    # tilt_pen = rot_tilt_coef * (1.0 - z_world[:, 2].clamp(-1.0, 1.0))  # 0 when upright
+    z_world = torch.bmm(transform.quaternion_to_matrix(xyzw_to_wxyz(object_rot)),
+                        z_body.unsqueeze(-1)).squeeze(-1)          # (B,3)
+    tilt_pen = rot_tilt_coef * (1.0 - z_world[:, 2].clamp(-1.0, 1.0))  # 0 when upright
+    print("tilt_pen ", tilt_pen[0])
 
     # ------------------------------------------------------------ #
     # 4.  Contact & finger shaping (unchanged)                     #
@@ -2834,7 +2877,7 @@ def compute_hand_reward_baseline(
     # 6.  Aggregate                                                #
     # ------------------------------------------------------------ #
     rew = ( progress_reward + rot_reward
-          + drift_pen
+          + drift_pen + tilt_pen
           + vel_pen
           + contact_reward   + grasp_reward
           + torque_penalty * torque_coef
@@ -2846,7 +2889,7 @@ def compute_hand_reward_baseline(
     # ------------------------------------------------------------ #
     # 7.  Reset conditions                                         #
     # ------------------------------------------------------------ #
-    fall   = object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)
+    fall   = (object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)) | (object_pos[:, 0] < 0.56)
     off_yaw= torch.abs(yaw_error) > success_tolerance
     timed  = progress_buf >= max_episode_length - 1
 
