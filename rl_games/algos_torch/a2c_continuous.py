@@ -25,9 +25,55 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
             'normalize_value' : self.normalize_value,
             'normalize_input': self.normalize_input,
         }
-        
-        self.model = self.network.build(build_config)
-        self.model.to(self.ppo_device)
+        if self.high_level_planner:
+            build_config = {
+                'actions_num' : self.actions_num,
+                'input_shape' : main_shape,
+                'num_seqs' : self.num_actors * self.num_agents,
+                'value_size': self.env_info.get('value_size',1),
+                'normalize_value' : self.normalize_value,
+                'normalize_input': self.normalize_input,
+            }
+            self.rotation_policy = self.network.build(build_config)
+            self.rotation_policy.to(self.ppo_device)
+            
+            self.translation_policy = self.network.build(build_config)
+            self.translation_policy.to(self.ppo_device)
+            
+            rotation_policy_ckpt_path = self.config.get('rotation_policy_ckpt', None)
+            if rotation_policy_ckpt_path is not None:
+                print("Loading rotation policy from", rotation_policy_ckpt_path)
+                rotation_policy_ckpt = torch.load(rotation_policy_ckpt_path, map_location=self.ppo_device)
+                self.rotation_policy.load_state_dict(rotation_policy_ckpt)
+            self.rotation_policy.eval()
+            
+            translation_policy_ckpt_path = self.config.get('translation_policy_ckpt', None)
+            if translation_policy_ckpt_path is not None:
+                print("Loading translation policy from", translation_policy_ckpt_path)
+                translation_policy_ckpt = torch.load(translation_policy_ckpt_path, map_location=self.ppo_device)
+                self.translation_policy.load_state_dict(translation_policy_ckpt)
+            self.translation_policy.eval()
+            
+            
+            for net in [self.rotation_policy, self.translation_policy]:
+                net.requires_grad_(False)   # sets requires_grad=False for every param
+                net.eval()                  # optional: deterministic BN / Dropout
+            
+            high_level_build_config = {
+                'actions_num' : self.actions_num + 1,#for high level we control mixture between rotation and translation and also residual actions
+                'input_shape' : main_shape,
+                'num_seqs' : self.num_actors * self.num_agents,
+                'value_size': self.env_info.get('value_size',1),
+                'normalize_value' : self.normalize_value,
+                'normalize_input': self.normalize_input,
+            }
+            self.model = self.network.build(high_level_build_config)
+            self.model.to(self.ppo_device)
+            
+            
+        else:
+            self.model = self.network.build(build_config)
+            self.model.to(self.ppo_device)
         self.states = None
         self.init_rnn_from_model(self.model)
         self.last_lr = float(self.last_lr)
@@ -121,7 +167,7 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
             batch_dict['dones'] = input_dict['dones']
             
         with torch.cuda.amp.autocast(enabled=self.mixed_precision):
-            res_dict = self.model(batch_dict)
+            res_dict = self.model(batch_dict)          
             action_log_probs = res_dict['prev_neglogp']
             values = res_dict['values']
             entropy = res_dict['entropy']

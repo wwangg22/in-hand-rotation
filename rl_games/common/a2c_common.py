@@ -116,6 +116,7 @@ class A2CBase(BaseAlgorithm):
 		self.weight_decay = config.get('weight_decay', 0.0)
 		self.use_action_masks = config.get('use_action_masks', False)
 		self.is_train = config.get('is_train', True)
+		self.high_level_planner = config.get('high_level_planner', False)
 
 		self.central_value_config = self.config.get('central_value_config', None)
 		self.has_central_value = self.central_value_config is not None
@@ -367,6 +368,12 @@ class A2CBase(BaseAlgorithm):
 				}
 				value = self.get_central_value(input_dict)
 				res_dict['values'] = value
+    		if self.high_level_planner:
+				self.rotation_policy.eval()
+				self.translation_policy.eval()
+				rotation_res_dict = self.rotation_policy(input_dict)
+				translation_res_dict = self.translation_policy(input_dict)
+				return rotation_res_dict, translation_res_dict, res_dict
 
 		return res_dict
 	
@@ -684,7 +691,11 @@ class A2CBase(BaseAlgorithm):
 				masks = self.vec_env.get_action_masks()
 				res_dict = self.get_masked_action_values(self.obs, masks)
 			else:
-				res_dict = self.get_action_values(self.obs)
+				# res_dict = self.get_action_values(self.obs)
+				if self.high_level_planner:
+					rotation_res_dict, translation_res_dict, res_dict= self.get_action_values(self.obs) 
+				else:
+					res_dict = self.get_action_values(self.obs)
 
 			self.experience_buffer.update_data('obses', n, self.obs['obs'])
 			self.experience_buffer.update_data('dones', n, self.dones)
@@ -693,7 +704,28 @@ class A2CBase(BaseAlgorithm):
 				self.experience_buffer.update_data(k, n, res_dict[k])
 			if self.has_central_value:
 				self.experience_buffer.update_data('states', n, self.obs['states'])
+			if self.high_level_planner:
+      			 """result = {
+                    'neglogpacs': torch.squeeze(neglogp),
+                    'values': self.unnorm_value(value),
+                    'actions': selected_action,
+                    'rnn_states': states,
+                    'mus': mu,
+                    'sigmas': sigma
+                }"""
+                # last action determins mixture
+                 raw_w   = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
+				w       = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
+				residual = res_dict['actions'][:, :-1]         # (N, act_dim)
 
+				final_actions = (
+					translation_res_dict['actions'] * (1.0 - w) +
+					rotation_res_dict['actions']    * w         +
+					residual
+				)
+
+				# overwrite for env_step
+				res_dict['actions'] = final_actions
 			step_time_start = time.time()
 			self.obs, rewards, self.dones, infos = self.env_step(res_dict['actions'])
 			step_time_end = time.time()
