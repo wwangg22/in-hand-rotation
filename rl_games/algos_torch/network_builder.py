@@ -402,7 +402,7 @@ class A2CBuilder(NetworkBuilder):
                     out_dim = 8,              # you hard-coded this
                 ).to("cuda")
 
-                adaption_state_dict = torch.load("adaption_checkpoint_0050.pt", map_location="cuda")
+                adaption_state_dict = torch.load("adaption_checkpoint_0300.pt", map_location="cuda")
                 self.adaption_model.load_state_dict(adaption_state_dict, strict=True)
                 self.adaption_model.eval()
 
@@ -536,9 +536,9 @@ class A2CBuilder(NetworkBuilder):
                 # print("shape of actual_obj_semantics: ", latent_vec.shape)
                 # print("shape of pred_obj_semantics: ", pred_obj_semantics.shape)
 
-                print("diff in obj_semantics: ", torch.abs(latent_vec - pred_obj_semantics).mean().item())
+                # print("diff in obj_semantics: ", torch.abs(latent_vec - pred_obj_semantics).mean().item())
 
-                new_obs[:, -16:-8] = pred_obj_semantics #latent_vec #obj_sem if obj_sem is not None else latent_vec
+                new_obs[:, -16:-8] = pred_obj_semantics #obj_sem if obj_sem is not None else latent_vec
 
                 # print("pc embedding vs pc_embed difference: ", torch.abs(pc_embedding - pc_embed).mean().item())
                 if pc_embed is None:

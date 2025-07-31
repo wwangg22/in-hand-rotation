@@ -227,7 +227,7 @@ class DistillCollector:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.is_testing = is_testing
-        self.current_learning_iteration = 140
+        self.current_learning_iteration = 37
 
         self.apply_reset = apply_reset
         self.teacher_resume = teacher_resume
@@ -433,7 +433,7 @@ class DistillCollector:
                             continue
                         storage[key] = torch.stack(storage[key], dim=0)
                         print(storage[key].shape)
-                    save_dir = os.path.join(self.teacher_data_dir, "teacher_batch_{}_{}_{}.pt".format(self.worker_id, it, int((i-199)/200)))
+                    save_dir = os.path.join(self.teacher_data_dir, "teacher_batch_translation_{}_{}_{}.pt".format(self.worker_id, it, int((i-199)/200)))
                     torch.save((storage['obs'], storage['teacher_obs'], storage['actions'], storage['sigmas'], storage['pointcloud'], storage['latent_vec'], storage['done'], storage['env_id'], storage['assets']),save_dir)  
                     storage = {'obs': [], 'teacher_obs': [], 'actions': [], 'sigmas': [], 'pointcloud': [], 'latent_vec': [], 'done': [], 'env_id': [], 'assets': self.vec_env.env.assets_buf}  # , 'pointcloud': []
                     reward_sum = []

@@ -280,17 +280,24 @@ class AllegroArmMOAR(VecTask):
                   'set_obj13_irregular_block', 'set_obj14_irregular_block_cross', 'set_obj15_irregular_block_time',
                   'set_obj16_cylinder_axis'],
             "custom": ["custom_obj1_cylinder",   "knife"], #"cup", "screwdriver", "powerdrill", "hammer"],
-            "working" : [
-                 "blue_cup", 
-                "blue_tea_box", 
+            "working":[
+                "blue_cup", "blue_tea_box", 
                 "remote_controller_1", "repellent"
             ],
-            "all":["black_marker", "stapler_2", "blue_cup", 
+            "translation":[
+                "blue_cup", 
+                "blue_moon", "blue_tea_box", 
+                "conditioner", "phillips_screwdriver", "flat_screwdriver",
+                "remote_controller_1", "repellent"
+            ],
+            "all":[
+                "black_marker", "stapler_2", "blue_cup", 
                 "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", 
                 "conditioner", "correction_fluid", "bowl", "scissors", "mug","fork",
                 "phillips_screwdriver", "flat_screwdriver", "stapler_1", "large_clamp",
                 "remote_controller_1", "knife", "two_color_hammer", "plastic_banana", "mini_claw_hammer_1", "large_marker",  
-                "toothpaste_1", "repellent"],
+                "toothpaste_1", "repellent"
+            ],
             "custom2": [ "black_marker", "bleach_cleanser", "blue_cup", 
                 "blue_marker", "blue_moon", "blue_plate", "blue_tea_box", "book_1", "book_2", 
                 "book_3", "book_4", "book_5", "book_6", "book_holder_1", "book_holder_2", "book_holder_3", 
@@ -484,10 +491,24 @@ class AllegroArmMOAR(VecTask):
         self.scale_min = 0.90 
         self.scale_max = 1.10
 
+        self.palm_center = torch.tensor([0.63, 1.0681e-04, 1.7850e-01], device="cuda:0") #5.7225e-01
+
+        self.relative_limit_x = torch.tensor([0.01, -0.01], device="cuda:0") # x can be -0.04, but for stability reason no 
+        #real bounds [0.15, -0.05]
+
+        self.relative_limit_y = torch.tensor([0.01, -0.01], device="cuda:0")
+        #real bounds [0.035, -0.035]
+
+        self.translation_axis = torch.zeros(self.cfg["env"]["numEnvs"], 3, dtype=torch.float, device="cuda:0")
+        self.prog_coef = self.cfg["env"].get("prog_coef", 1.0)
+        self.drift_coef = self.cfg["env"].get("drift_coef", -0.5)
+        self.rot_coef = self.cfg["env"].get("rot_coef", -0.5)
+
 
         super().__init__(config=self.cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
         self.object_class_indices_tensor = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.last_obs_buf = torch.zeros((self.num_envs, self.n_obs_dim), device=self.device, dtype=torch.float)
+        self.reset_axis_timer = 0
 
         self.dt = self.sim_params.dt
         control_freq_inv = self.cfg["env"].get("controlFrequencyInv", 1)
@@ -558,6 +579,8 @@ class AllegroArmMOAR(VecTask):
             self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0]], device=self.device)
 
         elif self.rotation_axis == "custom":
+            self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0]], device=self.device)
+        elif self.rotation_axis == "translation":
             self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0]], device=self.device)
         else:
             assert False, "wrong spin axis"
@@ -814,7 +837,13 @@ class AllegroArmMOAR(VecTask):
             object_start_pose = gymapi.Transform()
             object_start_pose.p = gymapi.Vec3()
 
-            pose_dx, pose_dy, pose_dz = self.obj_init_pos_shift[self.obj_init_type]
+            if self.rotation_axis == 'translation':
+                pose_dx = self.palm_center[0] + random.uniform(*self.relative_limit_x.tolist())
+                pose_dy = self.palm_center[1] + random.uniform(*self.relative_limit_y.tolist())
+                pose_dz = self.palm_center[2] + 0.05
+            else:
+                pose_dx, pose_dy, pose_dz = self.obj_init_pos_shift[self.obj_init_type]
+           
             object_start_pose.p.x = arm_hand_start_pose.p.x + pose_dx
             object_start_pose.p.y = arm_hand_start_pose.p.y + pose_dy
             object_start_pose.p.z = arm_hand_start_pose.p.z + pose_dz
@@ -913,11 +942,29 @@ class AllegroArmMOAR(VecTask):
 
                 # 4.c  copy into the big buffer  -------------------------
                 self.object_pc_buf[i].copy_(pc_local)
+            if self.rotation_axis == "translation":
+                pose_dx = self.palm_center[0] + random.uniform(*self.relative_limit_x.tolist())
+                pose_dy = self.palm_center[1] + random.uniform(*self.relative_limit_y.tolist())
+                pose_dz = self.palm_center[2] + 0.05
+                object_start_pose.p.x = arm_hand_start_pose.p.x + pose_dx
+                object_start_pose.p.y = arm_hand_start_pose.p.y + pose_dy
+                object_start_pose.p.z = arm_hand_start_pose.p.z + pose_dz 
+
+                translate_axis = ['+x', '-x', '+y', '-y']
+                choice = random.choice(translate_axis)
+
+                # self.translation_axis[i, 0] = 1 if choice == '+x' else -1 if choice == '-x' else 0
+                # self.translation_axis[i, 1] = 1 if choice == '+y' else -1 if choice == '-y' else 0
+                # self.translation_axis[i, 2] = 0
+                #force -y axis
+                self.translation_axis[i, 0] = 0
+                self.translation_axis[i, 1] = -1 
+                self.translation_axis[i, 2] = 0
             # randomize initial quat
             if self.object_set_id == "cross" or self.object_set_id == "custom" or (self.object_set_id == "working" and select_obj != "powerdrill" and select_obj != "bleach_cleanser"): 
-                angles = [-np.pi/2 , -np.pi*3 / 4, -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi*3 / 4, np.pi/2]
-                init_theta = random.choice(angles)
-                # init_theta = random.uniform(-np.pi / 2, np.pi / 2)
+                # angles = [-np.pi/2 , -np.pi*3 / 4, -np.pi/4, -np.pi/8,  0  , np.pi/8, np.pi/4, np.pi*3 / 4, np.pi/2]
+                # init_theta = random.choice(angles)
+                init_theta = random.uniform(-np.pi / 2, np.pi / 2)
 
                 # init_theta = np.pi / 4
                 # object_start_pose.r = gymapi.Quat(0, 0, np.cos(init_theta * 0.5), np.sin(init_theta * 0.5))
@@ -1205,6 +1252,59 @@ class AllegroArmMOAR(VecTask):
             self.extras['consecutive_successes'] = torch.zeros_like(self.consecutive_successes).mean()
             #print rewards
             return
+        elif self.rotation_axis == "translation":
+            # print("Translation axis: ", self.translation_axis)
+            self.reset_axis_timer +=1
+
+            # if self.reset_axis_timer >= 100:
+            #     print("Resetting translation axis")
+            #     self.reset_axis_timer = 0
+            #     dirs = torch.tensor([[ 1, 0, 0],    # +x
+            #          [-1, 0, 0],    # -x
+            #          [ 0, 1, 0],    # +y
+            #          [ 0,-1, 0]],   # -y
+            #         device=self.device, dtype=self.translation_axis.dtype)
+
+            #     rand_idx = torch.randint(0, 4, (self.num_envs,), device=self.device)  # shape (k,)
+            #     self.translation_axis = dirs[rand_idx]  # (k,3)  random axis
+
+
+            torque_penalty = (self.torques ** 2).sum(-1)
+            work_penalty   = (self.torques.abs() * self.dof_vel_finite_diff.abs()).sum(-1)
+
+            self.rew_buf[:], self.reset_buf[:], _ , \
+            self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = (
+                compute_hand_reward_translate(
+                    # --- task‑specific params you set in __init__ ---
+                    self.translation_axis,          # axis_unit (B, 3)
+                    self.prog_coef,                 # forward‑progress weight
+                    self.drift_coef,                # lateral‑drift weight
+                    self.rot_coef,                  # orientation‑error weight
+                    self.vel_coef,                  # lin‑vel penalty weight
+                    self.torque_coef,
+                    self.work_coef,
+                    self.contact_coef,
+                    self.finger_coef,
+                    # --- standard buffers/metrics -------------------
+                    self.rew_buf, self.reset_buf, self.progress_buf,
+                    self.successes, self.consecutive_successes,
+                    float(self.max_episode_length),
+                    self.fingertip_pos, self.object_pos, self.object_rot,
+                    self.object_init_pos, self.object_init_quat,
+                    self.object_linvel, self.object_angvel,
+                    self.goal_pos, self.goal_rot,
+                    self.finger_contacts, self.tip_contacts,
+                    self.control_error, self.actions, self.action_penalty_scale,
+                    self.success_tolerance, self.fall_dist, self.fall_penalty,
+                    torque_penalty, work_penalty,
+                    self.max_consecutive_successes, self.av_factor, self.palm_center
+                )
+            )
+
+            # bookkeeping for logging
+            self.extras['consecutive_successes'] = self.consecutive_successes.mean()
+            return
+
         else:
             if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
                 last_relative_pos = self.last_object_pos[:, 1] - self.last_object_pos[:, 0]
@@ -1582,8 +1682,12 @@ class AllegroArmMOAR(VecTask):
                 # 4. rest of privileged obs (all indices shifted +3)
                 obs_end = sem_start + 3                             # 82
                 self.states_buf[:, obs_end : obs_end + self.num_actions] = self.actions
-                self.states_buf[:, obs_end + self.num_actions :
-                                obs_end + self.num_actions + 24]     = self.spin_axis.repeat(1, 8)
+                if self.rotation_axis == "translation":
+                    self.states_buf[:, obs_end + self.num_actions :
+                                    obs_end + self.num_actions + 24]     = self.translation_axis.repeat(1, 8)
+                else:
+                    self.states_buf[:, obs_end + self.num_actions :
+                                    obs_end + self.num_actions + 24]     = self.spin_axis.repeat(1, 8)
 
                 all_contact = self.contact_tensor.reshape(-1, contacts, 3).clone()
                 all_contact = torch.norm(all_contact, dim=-1).float()
@@ -1638,7 +1742,11 @@ class AllegroArmMOAR(VecTask):
 
             # ------------ indices **UNCHANGED** on policy side ------------
             self.last_obs_buf[:, 45:61] = sensed_c                 # 16-wide
-            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
+            if self.rotation_axis == "translation":
+                self.last_obs_buf[:, 61:85] = self.translation_axis.repeat(1, 8)
+            else:
+
+                self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
 
             # randomisation ------------------------------------------------ #
             self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
@@ -2268,12 +2376,17 @@ class AllegroArmMOAR(VecTask):
             self.root_state_tensor[self.object_indices[env_ids], self.up_axis_idx] = self.object_init_state[env_ids, ..., self.up_axis_idx] + \
                                                                                         self.reset_position_noise * rand_floats[:, self.up_axis_idx].unsqueeze(1)
         else:
-            self.root_state_tensor[self.object_indices[env_ids], 0:2] = self.object_init_state[env_ids, ..., 0:2] + \
-                self.reset_position_noise * rand_floats[:, 0:2]
-            self.root_state_tensor[self.object_indices[env_ids], self.up_axis_idx] = self.object_init_state[env_ids, ..., self.up_axis_idx] + \
-                self.reset_position_noise * rand_floats[:, self.up_axis_idx]
-            # self.root_state_tensor[self.object_indices[env_ids], 2] += 0.02  # +2 cm
-        
+            if self.rotation_axis == "translation":
+                self.root_state_tensor[self.object_indices[env_ids], 0] = self.palm_center[0] + random.uniform(*self.relative_limit_x.tolist())
+                self.root_state_tensor[self.object_indices[env_ids], 1] = self.palm_center[1] + random.uniform(*self.relative_limit_y.tolist())
+                self.root_state_tensor[self.object_indices[env_ids], 2] = self.palm_center[2] + 0.05
+            else:
+                self.root_state_tensor[self.object_indices[env_ids], 0:2] = self.object_init_state[env_ids, ..., 0:2] + \
+                    self.reset_position_noise * rand_floats[:, 0:2]
+                self.root_state_tensor[self.object_indices[env_ids], self.up_axis_idx] = self.object_init_state[env_ids, ..., self.up_axis_idx] + \
+                    self.reset_position_noise * rand_floats[:, self.up_axis_idx]
+                # self.root_state_tensor[self.object_indices[env_ids], 2] += 0.02  # +2 cm
+            
         if not self.use_initial_rotation:
             # legacy codes.
             if self.object_set_id == "ball":
@@ -2319,6 +2432,19 @@ class AllegroArmMOAR(VecTask):
             self.reset_spin_axis(env_ids, init_quat=new_object_rot)
         else:
             self.reset_spin_axis(env_ids, init_quat=new_object_rot)
+
+        # if self.rotation_axis == "translation":
+        #     dirs = torch.tensor([[ 1, 0, 0],    # +x
+        #              [-1, 0, 0],    # -x
+        #              [ 0, 1, 0],    # +y
+        #              [ 0,-1, 0]],   # -y
+        #             device=self.device, dtype=self.translation_axis.dtype)
+
+        #     rand_idx = torch.randint(0, 4, (env_ids.numel(),), device=self.device)  # shape (k,)
+
+        #     self.translation_axis[self.object_indices[env_ids], 0] = dirs[rand_idx, 0]
+        #     self.translation_axis[self.object_indices[env_ids], 1] = dirs[rand_idx, 1]
+        #     self.translation_axis[self.object_indices[env_ids], 2] = dirs[rand_idx, 2]
 
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_state_tensor),
@@ -2444,10 +2570,10 @@ class AllegroArmMOAR(VecTask):
 
         self.compute_reward(self.actions)
 
-        if not self.cfg["env"]["legacy_obs"]:
+        if not self.cfg["env"]["legacy_obs"] and self.object_set_id != "working":
             if self.cfg["env"]["pc_mode"] == "cam":
                 self.fetch_camera_observations()
-            elif self.cfg["env"]["pc_mode"] == "label" :
+            elif self.cfg["env"]["pc_mode"] == "label":
                 imagined_mesh, fsr_pc = self.fetch_imagined_pointcloud()
                 self.fetch_camera_observations(imagined_mesh, fsr_pc)
             else:
@@ -2518,6 +2644,131 @@ class AllegroArmMOAR(VecTask):
 #####################################################################
 
 @torch.jit.script
+def compute_hand_reward_translate(
+        # --- translation‑task hyper‑params ---------------------------------- #
+        axis_unit            : torch.Tensor,   # (3,) world‑frame unit vector
+        prog_coef            : float,          # + reward for forward progress
+        drift_coef           : float,          # – penalty for lateral drift
+        rot_coef             : float,          # – penalty for orientation error
+        vel_coef             : float,          # optional linear‑vel penalty
+        torque_coef          : float,
+        work_coef            : float,
+        contact_coef         : float,
+        finger_coef          : float,
+        # --- generic buffers / signals (shape follows your spin kernel) ----- #
+        rew_buf, reset_buf, progress_buf, successes, consecutive_successes,
+        max_episode_length   : float,
+        fingertip_pos,                       # (B,4,3)
+        object_pos, object_rot,              # (B,3) , (B,4)  xyzw
+        object_init_pos, object_init_rot,    # (B,3) , (B,4)
+        object_linvel, object_angvel,        # (B,3) , (B,3)
+        target_pos, target_rot,              # (B,3) , (B,4)  (updated every interval)
+        finger_contacts, tip_contacts,       # (B,16) , (B,4)
+        control_error,                       # (B,)
+        actions,                             # (B,22)
+        action_penalty_scale : float,
+        success_tolerance    : float,        # not used here but kept for compat
+        fall_dist            : float,
+        fall_penalty         : float,
+        torque_penalty       , work_penalty, # (B,) already pre‑computed
+        max_consecutive_successes : int,
+        av_factor            : float,
+        palm_center
+):
+    # ---------------------------------------------------------------------- #
+    # 1.  Progress along axis (positive = forward)
+    # ---------------------------------------------------------------------- #
+    disp      = object_pos - palm_center.unsqueeze(0)            # (B,3)
+    proj      = (disp * axis_unit).sum(-1)              # (B,)
+    progress_reward = prog_coef * proj                  # linear reward
+    # print("progress_reward", progress_reward[0].cpu().item())
+
+    # ---------------------------------------------------------------------- #
+    # 2.  Lateral drift: distance orthogonal to axis
+    # ---------------------------------------------------------------------- #
+    drift_vec = disp - proj.unsqueeze(-1) * axis_unit   # (B,3)
+    drift_pen = drift_coef * torch.norm(drift_vec, dim=-1)
+    # print("drift_pen", drift_pen[0].cpu().item())
+
+    # ---------------------------------------------------------------------- #
+    # 3.  Orientation penalty (quat distance to initial rot)
+    # ---------------------------------------------------------------------- #
+    quat_diff   = quat_mul(object_rot, quat_conjugate(object_init_rot))   # (B,4)
+    rot_dist    = 2.0 * torch.asin(torch.clamp(torch.norm(quat_diff[:, :3], dim=-1), max=1.0))
+    rot_pen     = rot_coef * rot_dist
+    # # print("rot_pen", rot_pen[0].cpu().item())
+
+    # ---------------------------------------------------------------------- #
+    # 4.  Optional speed penalty (helps stabilise object)
+    # ---------------------------------------------------------------------- #
+    vel_pen = vel_coef * torch.norm(object_linvel, dim=-1)
+    # print("vel_pen", vel_pen[0].cpu().item())
+
+    # ---------------------------------------------------------------------- #
+    # 5.  Contact & finger rewards (same pattern as spin kernel)
+    # ---------------------------------------------------------------------- #
+    finger_sum   = torch.clip(finger_contacts.sum(-1).float(), 0.0, 5.0)
+    contact_reward = contact_coef * finger_sum
+
+    if finger_coef > 0.0:
+        obj_rep = object_pos.unsqueeze(1).repeat(1, 4, 1)              # (B,4,3)
+        dist = torch.norm(obj_rep - fingertip_pos, dim=-1)             # (B,4)
+        grasp_reward = torch.clip(0.1 / (4 * dist + 0.02), 0, 1).mean(-1) * finger_coef
+    else:
+        grasp_reward = torch.zeros_like(proj)
+
+    # ---------------------------------------------------------------------- #
+    # 6.  Action / torque / work penalties  (pre‑computed inputs)
+    # ---------------------------------------------------------------------- #
+    action_pen = action_penalty_scale * (actions ** 2).sum(-1)
+
+    # ---------------------------------------------------------------------- #
+    # 7.  Aggregate
+    # ---------------------------------------------------------------------- #
+    control_penalty_scale = 0.1
+            
+    rew = ( progress_reward
+          + drift_pen
+          + rot_pen
+          + vel_pen
+          + contact_reward
+          + grasp_reward
+          + torque_penalty * torque_coef
+          + work_penalty   * work_coef
+          + action_pen
+          + control_error * control_penalty_scale
+    )
+    # z_reward = object_pos[:, ..., 2] - 0.22
+    # rew = torch.where(z_reward >0 , rew + 0.05, rew) # z axis reward
+    
+
+    # ---------------------------------------------------------------------- #
+    # 8.  Reset logic
+    #     – drop / fall
+    #     – timeout
+    # ---------------------------------------------------------------------- #
+    fall = object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)
+    timed_out = progress_buf >= max_episode_length - 1
+    resets = torch.where(fall | timed_out | (object_pos[:,0] < 0.52),
+                         torch.ones_like(reset_buf),
+                         torch.zeros_like(reset_buf))
+    rew = torch.where((object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)) | (object_pos[:,0] < 0.52), rew + fall_penalty, rew)
+    reset_buf[:] = resets
+    rew_buf[:] = rew
+
+    # Consecutive‑success bookkeeping left unchanged
+    goal_resets = torch.zeros_like(reset_buf)   # not used here
+    num_resets = torch.sum(resets)
+    finished_cons = torch.sum(successes * resets.float())
+    cons_succ = torch.where(num_resets > 0,
+                            av_factor * finished_cons / num_resets + (1 - av_factor) * consecutive_successes,
+                            consecutive_successes)
+    consecutive_successes[:] = cons_succ
+
+    return rew_buf, reset_buf, goal_resets, progress_buf, successes, consecutive_successes
+
+
+@torch.jit.script
 def body_axis_world_z(q_tgt: torch.Tensor, axis_body: torch.Tensor) -> torch.Tensor:
     """
     Args
@@ -2556,6 +2807,7 @@ def compute_hand_reward_finger(
 ):
     # Distance from the hand to the object
     goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
+    goal_z = torch.abs(object_pos[..., 2] - target_pos[..., 2])
 
     if ignore_z_rot:
         success_tolerance = 2.0 * success_tolerance
@@ -2615,9 +2867,14 @@ def compute_hand_reward_finger(
         reward = torch.where(goal_dist[:, 1] >= fall_dist, reward + fall_penalty, reward)
         resets = torch.where(goal_dist[:, 0] >= fall_dist, torch.ones_like(reset_buf), reset_buf)
         resets = torch.where(goal_dist[:, 1] >= fall_dist, torch.ones_like(reset_buf), resets)
+    elif object_set_id == "working":
+        reward = torch.where(goal_z >= fall_dist, reward + fall_penalty, reward)
+        resets = torch.where(goal_z >= fall_dist, torch.ones_like(reset_buf), reset_buf)
     else:
         reward = torch.where(goal_dist >= fall_dist, reward + fall_penalty, reward)
+        # resets = torch.where(goal_z >= fall_dist, torch.ones_like(reset_buf), reset_buf)
         resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
+        
 
     if object_set_id == "non-convex" or object_set_id == "ball" or object_set_id == "cross_bmr" or object_set_id == "custom" or object_set_id == "working":
         pass
@@ -2631,10 +2888,14 @@ def compute_hand_reward_finger(
     else:
         resets = torch.where(deviation < 0, torch.ones_like(reset_buf), resets)
 
-    if object_set_id == "working":
+    if object_set_id == "working" or object_set_id == "custom":
         axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
         z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
-        resets = torch.where(z_val > 0.42 , torch.ones_like(reset_buf), resets) #5
+        resets = torch.where(z_val > 0.41 , torch.ones_like(reset_buf), resets)
+    
+    # if object_set_id == "working":
+    #     z_reward = object_pos[:, ..., 2] - 0.22
+    #     reward = torch.where(z_reward >0 , reward + 0.10, reward) # z axis reward
 
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_corand_floatsnsecutive_successes > 0

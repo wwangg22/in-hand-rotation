@@ -128,9 +128,9 @@ DEFAULTS = dict(
     sem_dim         = 32,       # pc_embedding target size (= act_dim)
     lr              = 1e-4,
     steps           = 4000,   # optimisation steps, not epochs
-    batch_size      = 512,       # episodes per update
+    batch_size      = 128,       # episodes per update
     frames_per_ep   = 12,        # timesteps sampled per episode
-    log_every       = 50,
+    log_every       = 25,
 )
 def _preproc_obs( obs_batch):
     import copy
@@ -146,7 +146,7 @@ def _preproc_obs( obs_batch):
             obs_batch = obs_batch.float() / 255.0
     return obs_batch
 
-ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
+ckpt_path = "/home/william/Downloads/last_translation-working-obj-8-dim_ep_24000_rew_22.384708.pth" #"/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
 
 @functools.lru_cache(maxsize=None)
 def load_vertices(fname: str) -> torch.Tensor:
@@ -188,8 +188,8 @@ def main(cfg):
 
     ckpt      = torch.load(ckpt_path, map_location="cpu")
 
-    # model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
-    # model.load_state_dict(model_ckpt, strict=True)
+    model_ckpt = torch.load("checkpoint_0050.pt", map_location=device)
+    model.load_state_dict(model_ckpt, strict=True)
 
     prefix   = "a2c_network.pc_encoder."
     pc_state = {k[len(prefix):]: v for k, v in ckpt["model"].items()

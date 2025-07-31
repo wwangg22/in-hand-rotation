@@ -17,7 +17,7 @@ distill:
   bc_warmup: True
   teacher_logdir: /home/william/Downloads #/home/william/Desktop/USC/in-hand-rotation/runs/baoding/baodingS1.0_C0.0_M0.02025-06-08_19-28-12-3278/nn
   student_logdir: /home/william/Downloads #runs/student/bc-baoding-multimodplus-3 #runs/student/new-no-vision-2  
-  teacher_resume: last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696 #last_z-axis-working-objsem-w-rot-32dim-new_ep_16000_rew_220.98907 #last_baoding_ep_5300_rew_1268.9863
+  teacher_resume: last_translation-working-obj-8-dim_ep_24000_rew_22.384708 #last_z-axis-working-objsem-w-rot-32dim-new_ep_16000_rew_220.98907 #last_baoding_ep_5300_rew_1268.9863
   student_resume: None
   vidlogdir: 'video'
   vid_log_step: 500

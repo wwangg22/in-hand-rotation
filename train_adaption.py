@@ -144,7 +144,7 @@ def _preproc_obs( obs_batch):
             obs_batch = obs_batch.float() / 255.0
     return obs_batch
 
-ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
+ckpt_path = "/home/william/Downloads/last_translation-working-obj-8-dim_ep_24000_rew_22.384708.pth" #"/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
 
 @functools.lru_cache(maxsize=None)
 def load_vertices(fname: str) -> torch.Tensor:
@@ -251,7 +251,7 @@ def main(cfg):
     #     trans_model.load_state_dict(trans_ckpt, strict=True)
 
 
-    model_ckpt = torch.load("latest_mlp.pt", map_location=device)
+    model_ckpt = torch.load("adaption_checkpoint_0300.pt", map_location=device)
     model.load_state_dict(model_ckpt, strict=True)
 
     
