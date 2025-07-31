@@ -1331,7 +1331,7 @@ class AllegroArmMOAR(VecTask):
                 compute_hand_reward_baseline(
                     self.rotation_target,              # (B,) per-env desired Δyaw
                     self.translation_axis,             # (B,3)
-                    self.spin_coef,                    # rot_closeness_coef
+                    1.5,                    # rot_closeness_coef
                     -0.3,                               # rot_tilt_coef  (example)
                     self.prog_coef, self.drift_coef,
                     self.vel_coef, self.torque_coef,
@@ -1793,8 +1793,13 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 45:61] = sensed_c                 # 16-wide
             if self.rotation_axis == "translation":
                 self.last_obs_buf[:, 61:85] = self.translation_axis.repeat(1, 8)
+            elif self.rotation_axis == "baseline":
+                xi, yi, zi, wi = self.object_init_quat.unbind(-1)        # (B,)
+                yaw_init = torch.atan2(2*(wi*zi + xi*yi),
+                                    1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
+                self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
+                self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
             else:
-
                 self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
 
             # randomisation ------------------------------------------------ #
@@ -2792,7 +2797,6 @@ def compute_hand_reward_baseline(
 
     # smooth, jump-free reward in [-coef, +coef]
     rot_reward = rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi)
-    # print("rot_reward", rot_reward[0])
 
     # ------------------------------------------------------------ #
     # 3.  Tilt penalty (rotation about X / Y)                      #
