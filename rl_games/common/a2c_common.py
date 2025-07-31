@@ -117,6 +117,12 @@ class A2CBase(BaseAlgorithm):
 		self.use_action_masks = config.get('use_action_masks', False)
 		self.is_train = config.get('is_train', True)
 		self.high_level_planner = config.get('high_level_planner', False)
+		self.rotation_policy_ckpt_path = self.config.get('rotation_policy_ckpt', None)
+		self.translation_policy_ckpt_path = self.config.get('translation_policy_ckpt', None)
+		print("Rotation policy checkpoint path:", self.rotation_policy_ckpt_path
+			  , "Translation policy checkpoint path:", self.translation_policy_ckpt_path
+			  , "High level planner:", self.high_level_planner)
+		
 
 		self.central_value_config = self.config.get('central_value_config', None)
 		self.has_central_value = self.central_value_config is not None
@@ -360,6 +366,11 @@ class A2CBase(BaseAlgorithm):
 
 		with torch.no_grad():
 			res_dict = self.model(input_dict)
+			if self.high_level_planner:
+				self.rotation_policy.eval()
+				self.translation_policy.eval()
+				rotation_res_dict = self.rotation_policy(input_dict)
+				translation_res_dict = self.translation_policy(input_dict)
 			if self.has_central_value:
 				states = obs['states']
 				input_dict = {
@@ -368,12 +379,8 @@ class A2CBase(BaseAlgorithm):
 				}
 				value = self.get_central_value(input_dict)
 				res_dict['values'] = value
-    		if self.high_level_planner:
-				self.rotation_policy.eval()
-				self.translation_policy.eval()
-				rotation_res_dict = self.rotation_policy(input_dict)
-				translation_res_dict = self.translation_policy(input_dict)
-				return rotation_res_dict, translation_res_dict, res_dict
+		if self.high_level_planner:
+			return rotation_res_dict, translation_res_dict, res_dict
 
 		return res_dict
 	
@@ -444,13 +451,29 @@ class A2CBase(BaseAlgorithm):
 
 	def init_tensors(self):
 		batch_size = self.num_agents * self.num_actors
+		
 		algo_info = {
 			'num_actors' : self.num_actors,
 			'horizon_length' : self.horizon_length,
 			'has_central_value' : self.has_central_value,
 			'use_action_masks' : self.use_action_masks
 		}
+		if self.high_level_planner:
+			self.env_info['action_space'] = gym.spaces.Box(
+				low  = -1.0,
+				high =  1.0,
+				shape = (23,),                  # (23,)
+				dtype = np.float32
+			)
 		self.experience_buffer = ExperienceBuffer(self.env_info, algo_info, self.ppo_device)
+	
+		if self.high_level_planner:
+			self.env_info['action_space'] = gym.spaces.Box(
+				low  = -1.0,
+				high =  1.0,
+				shape = (22,),                  # (22,)
+				dtype = np.float32
+			)
 
 		val_shape = (self.horizon_length, batch_size, self.value_size)
 		current_rewards_shape = (batch_size, self.value_size)
@@ -705,17 +728,17 @@ class A2CBase(BaseAlgorithm):
 			if self.has_central_value:
 				self.experience_buffer.update_data('states', n, self.obs['states'])
 			if self.high_level_planner:
-      			 """result = {
-                    'neglogpacs': torch.squeeze(neglogp),
-                    'values': self.unnorm_value(value),
-                    'actions': selected_action,
-                    'rnn_states': states,
-                    'mus': mu,
-                    'sigmas': sigma
-                }"""
-                # last action determins mixture
-                 raw_w   = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
-				w       = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
+				"""result = {
+					'neglogpacs': torch.squeeze(neglogp),
+					'values': self.unnorm_value(value),
+					'actions': selected_action,
+					'rnn_states': states,
+					'mus': mu,
+					'sigmas': sigma
+				}"""
+				# last action determins mixture
+				raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
+				w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
 				residual = res_dict['actions'][:, :-1]         # (N, act_dim)
 
 				final_actions = (

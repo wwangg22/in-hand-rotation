@@ -78,8 +78,8 @@ params:
     bc_loss_coef: 0.01
     weight_decay: 0.0
     high_level_planner: True
-    rotation_policy_ckpt: /home/william/in-hand-manipulation/in-hand-rotation/runs/z-axis-working-objsem-w-obj-enc-8-dim/S1.0_C0.0_M0.02025-07-28_15-10-50-83123/nn/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth
-    translation_policy_ckpt: /home/william/in-hand-manipulation/in-hand-rotation/runs/translation-working-obj-8-dim/S1.0_C0.0_M0.02025-07-29_12-27-16-70901/nn/last_translation-working-obj-8-dim_ep_24000_rew_22.384708.pth
+    rotation_policy_ckpt: /home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth
+    translation_policy_ckpt: /home/william/Downloads/last_translation-working-obj-8-dim_ep_24000_rew_22.384708.pth
     # Collect Trajectory
     player_collect: False
     player:

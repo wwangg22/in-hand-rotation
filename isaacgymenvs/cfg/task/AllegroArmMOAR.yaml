@@ -40,9 +40,9 @@ env:
   finger_coef: 0.1
   handInit: "default"
   numEnvs: ${resolve_default:16,${...num_envs}} 
-  prog_coef: 1.5
-  drift_coef: -0.3
-  rot_coef: -0.1
+  prog_coef: 0.5
+  drift_coef: -0.2
+  rot_coef: -0.02
   envSpacing: 0.75
   episodeLength: 400 #200
   enableDebugVis: False

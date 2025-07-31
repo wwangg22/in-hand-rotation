@@ -2695,7 +2695,40 @@ class AllegroArmMOAR(VecTask):
 #####################################################################
 ###=========================jit functions=========================###
 #####################################################################
+@torch.jit.script
+def body_axis_world_z(q_tgt: torch.Tensor, axis_body: torch.Tensor) -> torch.Tensor:
+    """
+    Args
+    ----
+    q_tgt      : (B, 4) quaternion(s) of the target pose, XYZW order.
+    axis_body  : (B, 3) or (3,) unit vector(s) in the object’s body frame
+                 whose world-frame Z component you want.
 
+    Returns
+    -------
+    z_world    : (B,)  —  the Z value of `axis_body` expressed in world
+                 coordinates for every element in the batch.
+    """
+    # Make axis_body shape compatible with batch size B
+    if axis_body.dim() == 1:                       # (3,)  → expand to (B,3)
+        axis_body = axis_body.unsqueeze(0).repeat(q_tgt.size(0), 1)
+
+    # Body → world rotation of the target pose
+    R_tgt = transform.quaternion_to_matrix(xyzw_to_wxyz(q_tgt))   # (B,3,3)
+
+    # Axis in world frame
+    axis_w = torch.bmm(R_tgt, axis_body.unsqueeze(-1)).squeeze(-1)  # (B,3)
+
+    return axis_w[:, 2]   # world-frame Z component
+
+@torch.jit.script
+def angdiff(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """
+    Smallest signed angular difference a-b (radians) in (-π, π].
+    Works on tensors of any shape.
+    """
+    d = a - b
+    return (d + math.pi) % (2 * math.pi) - math.pi
 #####################################################################
 #  Baseline: rotate about Z *and* translate                         #
 #####################################################################
@@ -2748,30 +2781,31 @@ def compute_hand_reward_baseline(
     # ------------------------------------------------------------ #
     # current yaw wrt world-Z  (xyzw quaternion)
     x, y, z, w = object_rot.unbind(-1)
-    yaw_now = torch.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))        # (B,)
+    yaw_now  = torch.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
 
-    # initial yaw (needed to express Δ yaw)
     xi, yi, zi, wi = object_init_rot.unbind(-1)
     yaw_init = torch.atan2(2*(wi*zi + xi*yi), 1 - 2*(yi*yi + zi*zi))
 
-    yaw_delta = yaw_now - yaw_init                                 # (B,)
-    # wrap to (-π,π]
-    yaw_delta = (yaw_delta + math.pi) % (2*math.pi) - math.pi
+    # >>> replace everything from here until rot_reward with:
+    yaw_delta = angdiff(yaw_now, yaw_init)              # (B,) signed Δyaw
+    yaw_error = angdiff(yaw_delta, rotation_target)     # desired – actual
 
-    yaw_error = yaw_delta - rotation_target                        # (B,)
-    # again wrap so error is shortest way
-    yaw_error = (yaw_error + math.pi) % (2*math.pi) - math.pi
-
+    # smooth, jump-free reward in [-coef, +coef]
     rot_reward = rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi)
+    # print("rot_reward", rot_reward[0])
 
     # ------------------------------------------------------------ #
     # 3.  Tilt penalty (rotation about X / Y)                      #
     # ------------------------------------------------------------ #
     #  body +Z in world frame
-    z_body  = object_rot.new_tensor([0., 0., 1.]).expand(object_rot.size(0), 3)
-    z_world = torch.bmm(transform.quaternion_to_matrix(xyzw_to_wxyz(object_rot)),
-                        z_body.unsqueeze(-1)).squeeze(-1)          # (B,3)
-    tilt_pen = rot_tilt_coef * (1.0 - z_world[:, 2].clamp(-1.0, 1.0))  # 0 when upright
+    # z_body = torch.zeros((object_rot.size(0), 3),           # (B,3)
+    #                  dtype=object_rot.dtype,
+    #                  device=object_rot.device)
+    # z_body[:, 2] = 1.0
+
+    # z_world = torch.bmm(transform.quaternion_to_matrix(xyzw_to_wxyz(object_rot)),
+    #                     z_body.unsqueeze(-1)).squeeze(-1)          # (B,3)
+    # tilt_pen = rot_tilt_coef * (1.0 - z_world[:, 2].clamp(-1.0, 1.0))  # 0 when upright
 
     # ------------------------------------------------------------ #
     # 4.  Contact & finger shaping (unchanged)                     #
@@ -2796,7 +2830,7 @@ def compute_hand_reward_baseline(
     # 6.  Aggregate                                                #
     # ------------------------------------------------------------ #
     rew = ( progress_reward + rot_reward
-          + drift_pen        + tilt_pen
+          + drift_pen
           + vel_pen
           + contact_reward   + grasp_reward
           + torque_penalty * torque_coef
@@ -2815,9 +2849,13 @@ def compute_hand_reward_baseline(
     resets = torch.where(fall | timed, torch.ones_like(reset_buf), reset_buf)
     rew    = torch.where(fall, rew + fall_penalty, rew)
 
+    # axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
+    # z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
+    # resets = torch.where(z_val > 0.4 , torch.ones_like(reset_buf), resets)
+
     # large tilt → reset
-    resets = torch.where(z_world[:, 2] < 0.5, torch.ones_like(resets), resets)
-    resets = torch.where(torch.abs(yaw_error) > math.pi, torch.ones_like(resets), resets)
+    # resets = torch.where(z_world[:, 2] < 0.5, torch.ones_like(resets), resets)
+    # resets = torch.where(torch.abs(yaw_error) > math.pi, torch.ones_like(resets), resets)
 
     # bookkeeping exactly as in translate kernel ------------------ #
     reset_buf[:] = resets
@@ -2959,32 +2997,6 @@ def compute_hand_reward_translate(
 
     return rew_buf, reset_buf, goal_resets, progress_buf, successes, consecutive_successes
 
-
-@torch.jit.script
-def body_axis_world_z(q_tgt: torch.Tensor, axis_body: torch.Tensor) -> torch.Tensor:
-    """
-    Args
-    ----
-    q_tgt      : (B, 4) quaternion(s) of the target pose, XYZW order.
-    axis_body  : (B, 3) or (3,) unit vector(s) in the object’s body frame
-                 whose world-frame Z component you want.
-
-    Returns
-    -------
-    z_world    : (B,)  —  the Z value of `axis_body` expressed in world
-                 coordinates for every element in the batch.
-    """
-    # Make axis_body shape compatible with batch size B
-    if axis_body.dim() == 1:                       # (3,)  → expand to (B,3)
-        axis_body = axis_body.unsqueeze(0).repeat(q_tgt.size(0), 1)
-
-    # Body → world rotation of the target pose
-    R_tgt = transform.quaternion_to_matrix(xyzw_to_wxyz(q_tgt))   # (B,3,3)
-
-    # Axis in world frame
-    axis_w = torch.bmm(R_tgt, axis_body.unsqueeze(-1)).squeeze(-1)  # (B,3)
-
-    return axis_w[:, 2]   # world-frame Z component
 
 @torch.jit.script
 def compute_hand_reward_finger(
