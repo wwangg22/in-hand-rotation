@@ -402,7 +402,7 @@ class A2CBuilder(NetworkBuilder):
                     out_dim = 8,              # you hard-coded this
                 ).to("cuda")
 
-                adaption_state_dict = torch.load("adaption_checkpoint_0300.pt", map_location="cuda")
+                adaption_state_dict = torch.load("latest_mlp_w_dagger_1.pt", map_location="cuda")
                 self.adaption_model.load_state_dict(adaption_state_dict, strict=True)
                 self.adaption_model.eval()
 
@@ -532,7 +532,7 @@ class A2CBuilder(NetworkBuilder):
                     'point_cloud': obs_dict['obs']['pointcloud']
                 }
 
-                pred_obj_semantics = self.adaption_model(obs_dict_sem, pc_embed)
+                pred_obj_semantics = self.adaption_model(obs_dict_sem, pc_embedding)
                 # print("shape of actual_obj_semantics: ", latent_vec.shape)
                 # print("shape of pred_obj_semantics: ", pred_obj_semantics.shape)
 
@@ -574,7 +574,7 @@ class A2CBuilder(NetworkBuilder):
                 # print("diff in pc_embedding: ", torch.abs(pc_embedding - pc_embedding_ac).mean().item())
                 # print("mean value in pc_embedding: ", pc_embedding.mean().item())
                 # print("mean value in ac pc_embedding: ", pc_embedding_ac.mean().item())
-                obs = torch.cat([new_obs, pc_embedding_ac], dim=-1)
+                obs = torch.cat([new_obs, pc_embedding], dim=-1)
             else:
                 obs = obs_dict['obs']
                 latent_vec = None

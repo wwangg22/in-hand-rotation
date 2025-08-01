@@ -361,7 +361,7 @@ class ModelA2CContinuousLogStd(BaseModel):
                     log_every       = 25,
                 )
 
-            state_dict = torch.load("checkpoint_0100.pt", map_location="cuda")
+            state_dict = torch.load("checkpoints/07-30-25-iter1-rotation/objectSemtransformer.pt", map_location="cuda")
             # self.transformer = OrderedSemanticsTransformer(
             #     repr_dim = DEFAULTS['repr_dim'],
             #     act_dim  = DEFAULTS['sem_dim'] + 8,
