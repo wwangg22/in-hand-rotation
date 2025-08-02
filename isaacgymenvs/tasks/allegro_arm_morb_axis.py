@@ -1794,11 +1794,32 @@ class AllegroArmMOAR(VecTask):
             if self.rotation_axis == "translation":
                 self.last_obs_buf[:, 61:85] = self.translation_axis.repeat(1, 8)
             elif self.rotation_axis == "baseline":
-                xi, yi, zi, wi = self.object_init_quat.unbind(-1)        # (B,)
+                # xi, yi, zi, wi = self.object_init_quat.unbind(-1)        # (B,)
+                # yaw_init = torch.atan2(2*(wi*zi + xi*yi),
+                #                     1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
+                # self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
+                # self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
+                repeats = 6
+                sin_rot = torch.sin(self.rotation_target).unsqueeze(1).repeat(1, repeats)
+                cos_rot = torch.cos(self.rotation_target).unsqueeze(1).repeat(1, repeats)
+
+                # 2) initial object yaw in world frame
+                xi, yi, zi, wi = self.object_init_quat.unbind(-1)            # (B,)
                 yaw_init = torch.atan2(2*(wi*zi + xi*yi),
-                                    1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
-                self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
-                self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
+                                    1.0 - 2.0*(yi*yi + zi*zi))            # (B,)
+
+                sin_yaw0 = torch.sin(yaw_init).unsqueeze(1).repeat(1, repeats)
+                cos_yaw0 = torch.cos(yaw_init).unsqueeze(1).repeat(1, repeats)
+
+                # ─── Pack into observation buffer ──────────────────────────────────
+                # [61:73)   → 12 floats  (sin Δψ)
+                # [73:85)   → 12 floats  (cos Δψ)
+                # [85:97)   → 12 floats  (sin ψ₀)
+                # [97:109)  → 12 floats  (cos ψ₀)
+                self.last_obs_buf[:, 61:67]  = sin_rot
+                self.last_obs_buf[:, 67:73]  = cos_rot
+                self.last_obs_buf[:, 73:79]  = sin_yaw0
+                self.last_obs_buf[:, 79:85] = cos_yaw0
                 # print("yaw init mean, max,min, std:", yaw_init.mean().item(), yaw_init.max().item(), yaw_init.min().item(), yaw_init.std().item())
             else:
                 self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
@@ -2643,42 +2664,42 @@ class AllegroArmMOAR(VecTask):
         else:
             condition = False
         
-        if self.viewer and self.rotation_axis == "baseline":      # draw only for this task
-            self.gym.clear_lines(self.viewer)
+        # if self.viewer and self.rotation_axis == "baseline":      # draw only for this task
+        #     self.gym.clear_lines(self.viewer)
 
-            axis_len = 0.20
-            x_local  = torch.tensor([axis_len, 0.0,      0.0], device=self.device)
-            y_local  = torch.tensor([0.0,      axis_len, 0.0], device=self.device)
-            z_local  = torch.tensor([0.0,      0.0,      axis_len], device=self.device)
+        #     axis_len = 0.20
+        #     x_local  = torch.tensor([axis_len, 0.0,      0.0], device=self.device)
+        #     y_local  = torch.tensor([0.0,      axis_len, 0.0], device=self.device)
+        #     z_local  = torch.tensor([0.0,      0.0,      axis_len], device=self.device)
 
-            for env_id, env_ptr in enumerate(self.envs):
-                # ───────────── target orientation ─────────────
-                q_init = self.object_init_quat[env_id]                      # xyzw
-                dq     = quat_from_angle_axis(self.rotation_target[env_id],
-                                            self.z_unit_tensor[env_id])
-                q_tgt  = quat_mul(dq, q_init)                               # xyzw
+        #     for env_id, env_ptr in enumerate(self.envs):
+        #         # ───────────── target orientation ─────────────
+        #         q_init = self.object_init_quat[env_id]                      # xyzw
+        #         dq     = quat_from_angle_axis(self.rotation_target[env_id],
+        #                                     self.z_unit_tensor[env_id])
+        #         q_tgt  = quat_mul(dq, q_init)                               # xyzw
 
-                p      = self.object_pos[env_id].cpu().numpy()              # anchor
+        #         p      = self.object_pos[env_id].cpu().numpy()              # anchor
 
-                Tx, Ty, Tz = (quat_apply(q_tgt, v).cpu().numpy()
-                            for v in (x_local, y_local, z_local))
+        #         Tx, Ty, Tz = (quat_apply(q_tgt, v).cpu().numpy()
+        #                     for v in (x_local, y_local, z_local))
 
-                self.gym.add_lines(self.viewer, env_ptr, 3,
-                    [*p, *(p+Tx),  *p, *(p+Ty),  *p, *(p+Tz)],
-                    [(1.00, 0.55, 0.25),   # target X  (orange-red)
-                    (0.30, 1.00, 0.30),   # target Y  (lime green)
-                    (0.25, 0.60, 1.00)])  # target Z  (sky blue)
+        #         self.gym.add_lines(self.viewer, env_ptr, 3,
+        #             [*p, *(p+Tx),  *p, *(p+Ty),  *p, *(p+Tz)],
+        #             [(1.00, 0.55, 0.25),   # target X  (orange-red)
+        #             (0.30, 1.00, 0.30),   # target Y  (lime green)
+        #             (0.25, 0.60, 1.00)])  # target Z  (sky blue)
 
-                # ───────────── current orientation ─────────────
-                q_now = self.object_rot[env_id]                             # xyzw
-                Cx, Cy, Cz = (quat_apply(q_now, v).cpu().numpy()
-                            for v in (x_local, y_local, z_local))
+        #         # ───────────── current orientation ─────────────
+        #         q_now = self.object_rot[env_id]                             # xyzw
+        #         Cx, Cy, Cz = (quat_apply(q_now, v).cpu().numpy()
+        #                     for v in (x_local, y_local, z_local))
 
-                self.gym.add_lines(self.viewer, env_ptr, 3,
-                    [*p, *(p+Cx),  *p, *(p+Cy),  *p, *(p+Cz)],
-                    [(1.00, 0.00, 0.00),   # current X  (pure red)
-                    (0.00, 1.00, 0.00),   # current Y  (pure green)
-                    (0.00, 0.30, 1.00)])  # current Z  (deep blue)
+        #         self.gym.add_lines(self.viewer, env_ptr, 3,
+        #             [*p, *(p+Cx),  *p, *(p+Cy),  *p, *(p+Cz)],
+        #             [(1.00, 0.00, 0.00),   # current X  (pure red)
+        #             (0.00, 1.00, 0.00),   # current Y  (pure green)
+        #             (0.00, 0.30, 1.00)])  # current Z  (deep blue)
         if condition and self.debug_viz:
             # draw axes on target object
             self.gym.clear_lines(self.viewer)
@@ -2818,9 +2839,9 @@ def compute_hand_reward_baseline(
 
     drift_vec = disp - proj.unsqueeze(-1) * translation_axis
     drift_pen = drift_coef * torch.norm(drift_vec, dim=-1)
-    print("progress_reward ", progress_reward[0])
+    # print("progress_reward ", progress_reward[0])
 
-    print("drift_pen ", drift_pen[0])
+    # print("drift_pen ", drift_pen[0])
 
     # ------------------------------------------------------------ #
     # 2.  Rotation about world-Z                                   #
@@ -2838,7 +2859,7 @@ def compute_hand_reward_baseline(
 
     # smooth, jump-free reward in [-coef, +coef]
     rot_reward = (rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi))**2
-    print("rot_reward ", rot_reward[0])
+    # print("rot_reward ", rot_reward[0])
 
     # ------------------------------------------------------------ #
     # 3.  Tilt penalty (rotation about X / Y)                      #
@@ -2852,7 +2873,7 @@ def compute_hand_reward_baseline(
     z_world = torch.bmm(transform.quaternion_to_matrix(xyzw_to_wxyz(object_rot)),
                         z_body.unsqueeze(-1)).squeeze(-1)          # (B,3)
     tilt_pen = rot_tilt_coef * (1.0 - z_world[:, 2].clamp(-1.0, 1.0))  # 0 when upright
-    print("tilt_pen ", tilt_pen[0])
+    # print("tilt_pen ", tilt_pen[0])
 
     # ------------------------------------------------------------ #
     # 4.  Contact & finger shaping (unchanged)                     #
