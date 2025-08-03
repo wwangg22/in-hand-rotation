@@ -462,7 +462,7 @@ class A2CBase(BaseAlgorithm):
 			self.env_info['action_space'] = gym.spaces.Box(
 				low  = -1.0,
 				high =  1.0,
-				shape = (23,),                  # (23,)
+				shape = (24,),                  # (23,)
 				dtype = np.float32
 			)
 		self.experience_buffer = ExperienceBuffer(self.env_info, algo_info, self.ppo_device)
@@ -738,12 +738,12 @@ class A2CBase(BaseAlgorithm):
 				}"""
 				# last action determins mixture
 				raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
+				raw_control = res_dict['actions'][:, -2:-1]          # (N, act_dim-2)
 				w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
-				residual = res_dict['actions'][:, :-1]         # (N, act_dim)
-
+				residual = res_dict['actions'][:, :-2]         # (N, act_dim)
 				final_actions = (
-					translation_res_dict['actions'] * (1.0 - w) +
-					rotation_res_dict['actions']    * w         +
+					raw_control * (translation_res_dict['actions'] * (1.0 - w) +
+					rotation_res_dict['actions']    * w )        +
 					residual
 				)
 
@@ -1338,8 +1338,8 @@ class ContinuousA2CBase(A2CBase):
 						print(f"[Rewards] μ={stats['mean'][0]:.3f}  σ={stats['std'][0]:.3f}  "
 							f"min={stats['min'][0]:.3f}  max={stats['max'][0]:.3f}  "
 							f"median={stats['median'][0]:.3f}  n={stats['n']}")
-					print(f'epoch: {epoch_num}, mean rewards: {mean_rewards}, mean lengths: {mean_lengths}')
-					
+						print(f'epoch: {epoch_num}, mean rewards: {mean_rewards}, mean lengths: {mean_lengths}')
+
 				self.write_stats(total_time, epoch_num, step_time, play_time, update_time, a_losses, c_losses, entropies, kls, last_lr, lr_mul, frame, scaled_time, scaled_play_time, curr_frames)
 				if len(b_losses) > 0:
 					self.writer.add_scalar('losses/bounds_loss', torch_ext.mean_list(b_losses).item(), frame)

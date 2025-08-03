@@ -58,7 +58,7 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
                 net.eval()                  # optional: deterministic BN / Dropout
             
             high_level_build_config = {
-                'actions_num' : self.actions_num+1,#for high level we control mixture between rotation and translation and also residual actions
+                'actions_num' : self.actions_num+2,#for high level we control mixture between rotation and translation and also residual actions
                 'input_shape' : main_shape,
                 'num_seqs' : self.num_actors * self.num_agents,
                 'value_size': self.env_info.get('value_size',1),

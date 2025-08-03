@@ -2916,6 +2916,18 @@ def compute_hand_reward_baseline(
 
     resets = torch.where(fall | timed, torch.ones_like(reset_buf), reset_buf)
     rew    = torch.where(fall, rew + fall_penalty, rew)
+    bonus_tol_rad = math.radians(5.0)  # 5 degrees in radians
+    bonus_coef = 10000
+
+    close_yaw = torch.abs(yaw_error) < bonus_tol_rad     # e.g. bonus_tol_rad = 5° ≈ 0.0873
+    give_bonus = timed & (~fall) & close_yaw             # ONLY when timed-out cleanly
+
+    super_bonus = torch.where(
+        give_bonus,
+        torch.full_like(rew, bonus_coef),                # constant bonus
+        torch.zeros_like(rew)
+    )
+    rew = rew + super_bonus
 
     # axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
     # z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)
@@ -3051,6 +3063,7 @@ def compute_hand_reward_translate(
                          torch.ones_like(reset_buf),
                          torch.zeros_like(reset_buf))
     rew = torch.where((object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)) | (object_pos[:,0] < 0.52), rew + fall_penalty, rew)
+    
     reset_buf[:] = resets
     rew_buf[:] = rew
 

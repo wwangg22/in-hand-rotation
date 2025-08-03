@@ -20,6 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from rl_games.algos_torch import model_builder
 from rl_games.algos_torch import central_value
 from rl_games.algos_torch import torch_ext
+from collections import deque
 
 import wandb
 
@@ -67,6 +68,7 @@ class DistillWarmUpTrainer:
             player=None,
             ablation_mode=None,
             student_resume="None",
+            high_level_planner=False,
     ):
         self.ablation_mode = ablation_mode 
 
@@ -106,6 +108,8 @@ class DistillWarmUpTrainer:
         self.config = teacher_config
 
         self.num_actors = teacher_config['num_actors']
+
+        self.high_level_planner = high_level_planner
 
         self.is_testing = is_testing
         self.vidlogdir = vidlogdir
@@ -150,10 +154,17 @@ class DistillWarmUpTrainer:
         # We now define teacher network.
         self.teacher_builder = model_builder.ModelBuilder()
         self.teacher_network = self.teacher_builder.load(teacher_params)
-        if isinstance(self.obs_shape, dict):
-            self.teacher_obs_shape = self.obs_shape['obs']
-        else:
+        if self.high_level_planner:
             self.teacher_obs_shape = self.obs_shape
+        else:
+            if isinstance(self.obs_shape, dict):
+                self.teacher_obs_shape = self.obs_shape['obs']
+                # print the shapes of the keys in obs_shape
+                for k, v in self.obs_shape.items():
+                    print(f"Shape of {k}: {v}")
+
+            else:
+                self.teacher_obs_shape = self.obs_shape
 
         # print("Teacher observation shape:", self.teacher_obs_shape)
         # print("Observation space:", self.observation_space) 
@@ -166,8 +177,58 @@ class DistillWarmUpTrainer:
             'normalize_value': self.normalize_value,
             'normalize_input': self.normalize_input,
         }
-        self.teacher_actor_critic = self.teacher_network.build(self.teacher_build_config)
-        self.teacher_actor_critic.to(self.device)
+
+        print("teacher obs shape ", self.teacher_obs_shape)
+
+        if self.high_level_planner:
+            build_config = {
+                'actions_num' : self.actions_num,
+                'input_shape' : self.teacher_obs_shape,
+                'num_seqs' : self.num_actors * self.num_agents,
+                'value_size': self.env_info.get('value_size',1),
+                'normalize_value' : self.normalize_value,
+                'normalize_input': self.normalize_input,
+            }
+            self.rotation_policy = self.teacher_network.build(build_config)
+            self.rotation_policy.to(self.device)
+
+            self.translation_policy = self.teacher_network.build(build_config)
+            self.translation_policy.to(self.device)
+            self.rotation_policy_ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
+            self.translation_policy_ckpt_path = "/home/william/Downloads/last_translation-working-obj-8-dim_ep_24000_rew_22.384708.pth"
+            
+            if self.rotation_policy_ckpt_path is not None:
+                print("Loading rotation policy from", self.rotation_policy_ckpt_path)
+                rotation_policy_ckpt = torch.load(self.rotation_policy_ckpt_path, map_location=self.device)
+                self.rotation_policy.load_state_dict(rotation_policy_ckpt['model'])
+            self.rotation_policy.eval()
+            
+            if self.translation_policy_ckpt_path is not None:
+                print("Loading translation policy from", self.translation_policy_ckpt_path)
+                translation_policy_ckpt = torch.load(self.translation_policy_ckpt_path, map_location=self.device)
+                self.translation_policy.load_state_dict(translation_policy_ckpt['model'])
+            self.translation_policy.eval()
+            
+            
+            for net in [self.rotation_policy, self.translation_policy]:
+                net.requires_grad_(False)   # sets requires_grad=False for every param
+                net.eval()                  # optional: deterministic BN / Dropout
+            
+            high_level_build_config = {
+                'actions_num' : self.actions_num+1,#for high level we control mixture between rotation and translation and also residual actions
+                'input_shape' : self.teacher_obs_shape,
+                'num_seqs' : self.num_actors * self.num_agents,
+                'value_size': self.env_info.get('value_size',1),
+                'normalize_value' : self.normalize_value,
+                'normalize_input': self.normalize_input,
+            }
+            self.teacher_actor_critic = self.teacher_network.build(high_level_build_config)
+            self.teacher_actor_critic.to(self.device)
+            
+            
+        else:
+            self.teacher_actor_critic = self.teacher_network.build(self.teacher_build_config)
+            self.teacher_actor_critic.to(self.device)
         
         if self.has_central_value:
             print('Adding Central Value Network')
@@ -194,39 +255,43 @@ class DistillWarmUpTrainer:
                 'multi_gpu': self.multi_gpu,
             }
             self.teacher_central_value_net = central_value.CentralValueTrain(**teacher_cv_config).to(self.device)
-
-        # We now define student network.
-        self.student_builder = model_builder.ModelBuilder()
-        self.student_network = self.student_builder.load(student_params)
-        if self.ablation_mode == "no-tactile":
-            self.student_obs_shape = {'obs': (276, ), 'pointcloud': (680, 6)}
-        elif self.ablation_mode == "multi-modality-plus":
-            self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (808, 6)}
-        elif self.ablation_mode == "aug":
-            self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (680, 6)}
-        elif self.ablation_mode == "no-pc":
-            self.student_obs_shape = self.obs_shape['student_obs']
-        else:
-            raise NotImplementedError
         
-        self.student_build_config = {
-            'actions_num': self.actions_num,
-            'input_shape': self.student_obs_shape,
-            'num_seqs': self.num_actors * self.num_agents,
-            'value_size': self.env_info.get('value_size', 1),
-            'normalize_value': self.normalize_value,
-            'normalize_input': self.normalize_input,
-        }
-        self.student_actor_critic = self.student_network.build(self.student_build_config)
-        self.student_actor_critic.to(self.device)
+        #comment the student out when just running test
 
-        if student_resume is not None and student_resume != "None":
-            student_path = "{}/{}.pth".format(student_log_dir, student_resume)
-            print("Loading student model from", student_path)
-            self.student_load(student_path)
+        if not self.high_level_planner:
+            # We now define student network.
+            self.student_builder = model_builder.ModelBuilder()
+            self.student_network = self.student_builder.load(student_params)
+            print(self.ablation_mode)
+            if self.ablation_mode == "no-tactile":
+                self.student_obs_shape = {'obs': (276, ), 'pointcloud': (680, 6)}
+            elif self.ablation_mode == "multi-modality-plus":
+                self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (808, 6)}
+            elif self.ablation_mode == "aug":
+                self.student_obs_shape = {'obs': self.obs_shape['student_obs'], 'pointcloud': (680, 6)}
+            elif self.ablation_mode == "no-pc":
+                self.student_obs_shape = self.obs_shape['student_obs']
+            else:
+                raise NotImplementedError
+            
+            self.student_build_config = {
+                'actions_num': self.actions_num,
+                'input_shape': self.student_obs_shape,
+                'num_seqs': self.num_actors * self.num_agents,
+                'value_size': self.env_info.get('value_size', 1),
+                'normalize_value': self.normalize_value,
+                'normalize_input': self.normalize_input,
+            }
+            self.student_actor_critic = self.student_network.build(self.student_build_config)
+            self.student_actor_critic.to(self.device)
 
-        self.optimizer = optim.Adam(
-            self.student_actor_critic.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            if student_resume is not None and student_resume != "None":
+                student_path = "{}/{}.pth".format(student_log_dir, student_resume)
+                print("Loading student model from", student_path)
+                self.student_load(student_path)
+
+            self.optimizer = optim.Adam(
+                self.student_actor_critic.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
         # PPO parameters
         self.num_learning_epochs = num_learning_epochs
@@ -349,6 +414,11 @@ class DistillWarmUpTrainer:
 
         with torch.no_grad():
             res_dict = model(input_dict)
+            if self.high_level_planner and mode == 'teacher':
+                self.rotation_policy.eval()
+                self.translation_policy.eval()
+                rotation_res_dict = self.rotation_policy(input_dict)
+                translation_res_dict = self.translation_policy(input_dict)
             if self.has_central_value and mode == 'teacher':
                 states = obs['states']
                 input_dict = {
@@ -357,6 +427,8 @@ class DistillWarmUpTrainer:
                 }
                 value = self.get_teacher_central_value(input_dict)
                 res_dict['values'] = value
+        if self.high_level_planner:
+            return rotation_res_dict, translation_res_dict, res_dict
 
         return res_dict
 
@@ -878,6 +950,9 @@ class DistillWarmUpTrainer:
         net = self.teacher_actor_critic
         net.eval()
 
+        success_window = deque(maxlen=window)
+        SUCCESS_THRESHOLD = 10000
+
         # ── helpers ────────────────────────────────────────────────────────────
         meter = torch_ext.AverageMeter(in_shape=(self.value_size,),
                                     max_size=window).to(self.device)
@@ -892,10 +967,25 @@ class DistillWarmUpTrainer:
         while max_steps is None:
             # ---- build observation exactly like play_teacher_forever ----------
             teacher_obs        = obs.copy()
-            teacher_obs["obs"] = obs["obs"]["obs"]     # unwrap dict-of-dict
+            teacher_obs["obs"]["obs"] = obs["obs"]["obs"]     # unwrap dict-of-dict
+            # print("keys in obs[shape]", obs['obs'].keys())
+            teacher_obs["obs"]["pointcloud"]= obs["obs"]["pointcloud"]
+            # print("shape of keys in teacher obs", teacher_obs['obs'].shape, teacher_obs['pointcloud'].shape )
 
-            res     = self.get_action_values(net, teacher_obs, mode="teacher")
-            actions = torch.clamp(res["actions"], -1.0, 1.0)
+            if self.high_level_planner:
+                rotation_res_dict, translation_res_dict, res_dict= self.get_action_values(net, teacher_obs, mode="teacher") 
+                raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
+                w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
+                residual = res_dict['actions'][:, :-1]         # (N, act_dim)
+
+                actions = (
+                    translation_res_dict['actions'] * (1.0 - w) +
+                    rotation_res_dict['actions']    * w         +
+                    residual
+                )
+            else:
+                res     = self.get_action_values(net, teacher_obs, mode="teacher")
+                actions = torch.clamp(res["actions"], -1.0, 1.0)
 
             # ---- environment step --------------------------------------------
             obs, rew, done, _ = self.vec_env.step(actions)
@@ -910,7 +1000,12 @@ class DistillWarmUpTrainer:
             finished_idx = d.nonzero(as_tuple=False).view(-1)   # which envs ended?
 
             if finished_idx.numel():
+                # windowed return stats (existing behaviour)
                 meter.update(ep_returns[finished_idx])
+
+                # --- NEW: success tracking ---------------------------------------
+                successes = (ep_returns[finished_idx] >= SUCCESS_THRESHOLD)
+                success_window.extend(successes.int().tolist())
 
                 # reset trackers for just-finished envs so they can start anew
                 ep_returns[finished_idx] = 0.0
@@ -920,14 +1015,21 @@ class DistillWarmUpTrainer:
 
             # ---- periodic console output -------------------------------------
             if total_env_steps % next_report == 0:
-                stats = meter.get_stats()                # dict with ndarray entries
+                stats = meter.get_stats()              # dict with ndarray entries
 
-                # ── unpack scalars cleanly ───────────────────────────────────────────
+                # sliding-window success rate (0–1); handle <window warm-up
+                if success_window:
+                    success_rate = sum(success_window) / len(success_window)
+                else:
+                    success_rate = 0.0
 
-                print(f"[teacher] step", total_env_steps)
+                print(f"[teacher] step {total_env_steps}")
                 print(f"[Rewards] μ={stats['mean'][0]:.3f}  σ={stats['std'][0]:.3f}  "
-							f"min={stats['min'][0]:.3f}  max={stats['max'][0]:.3f}  "
-							f"median={stats['median'][0]:.3f}  n={stats['n']}")
+                    f"min={stats['min'][0]:.3f}  max={stats['max'][0]:.3f}  "
+                    f"median={stats['median'][0]:.3f}  n={stats['n']}")
+                print(f"[Success]  last {len(success_window):>3} eps → "
+                    f"{success_rate*100:5.1f}% reached goal (≥{SUCCESS_THRESHOLD:g})")
+
 
     @torch.no_grad()
     def continuous_eval_loop_student(self,

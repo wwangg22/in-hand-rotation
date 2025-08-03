@@ -263,7 +263,7 @@ class A2CBuilder(NetworkBuilder):
                 if self.permute_input:
                     input_shape = torch_ext.shape_whc_to_cwh(input_shape)
                 cnn_args = {
-                    'ctype' : self.cnn['type'], 
+                    'ctype' : self.cnn['tres_dict = model(input_dict)ype'], 
                     'input_shape' : input_shape, 
                     'convs' :self.cnn['convs'], 
                     'activation' : self.cnn['activation'], 
