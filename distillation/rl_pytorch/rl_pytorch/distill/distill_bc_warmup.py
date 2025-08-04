@@ -413,12 +413,14 @@ class DistillWarmUpTrainer:
         }
 
         with torch.no_grad():
-            res_dict = model(input_dict)
-            if self.high_level_planner and mode == 'teacher':
+            if self.high_level_planner:
                 self.rotation_policy.eval()
                 self.translation_policy.eval()
                 rotation_res_dict = self.rotation_policy(input_dict)
                 translation_res_dict = self.translation_policy(input_dict)
+                res_dict = model(input_dict, latent=rotation_res_dict['latent_vec'])
+            else:
+                res_dict = model(input_dict)
             if self.has_central_value and mode == 'teacher':
                 states = obs['states']
                 input_dict = {
