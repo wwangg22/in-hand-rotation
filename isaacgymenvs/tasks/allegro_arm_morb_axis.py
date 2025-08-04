@@ -2901,6 +2901,7 @@ def compute_hand_reward_baseline(
 
     rot_dist   = torch.abs(yaw_error)                        # d(q_t, q_goal)
     rot_reward = 1.0 / (rot_dist + eps)                      # 1/(d+ε)
+    rot_reward = rot_reward * 0.1
     # print("rot_reward ", rot_reward[0])
 
     # ------------------------------------------------------------ #
@@ -2959,7 +2960,7 @@ def compute_hand_reward_baseline(
     resets = torch.where(fall | timed, torch.ones_like(reset_buf), reset_buf)
     rew    = torch.where(fall, rew + fall_penalty, rew)
     bonus_tol_rad = math.radians(5.0)  # 5 degrees in radians
-    bonus_coef = 10000
+    bonus_coef = 500
 
     close_yaw = torch.abs(yaw_error) < bonus_tol_rad     # e.g. bonus_tol_rad = 5° ≈ 0.0873
     give_bonus = timed & (~fall) & close_yaw             # ONLY when timed-out cleanly
