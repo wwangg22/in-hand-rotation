@@ -2847,18 +2847,30 @@ def compute_hand_reward_baseline(
     # 2.  Rotation about world-Z                                   #
     # ------------------------------------------------------------ #
     # current yaw wrt world-Z  (xyzw quaternion)
+    # x, y, z, w = object_rot.unbind(-1)
+    # yaw_now  = torch.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+
+    # xi, yi, zi, wi = object_init_rot.unbind(-1)
+    # yaw_init = torch.atan2(2*(wi*zi + xi*yi), 1 - 2*(yi*yi + zi*zi))
+
+    # # >>> replace everything from here until rot_reward with:
+    # yaw_delta = angdiff(yaw_now, yaw_init)              # (B,) signed Δyaw
+    # yaw_error = angdiff(yaw_delta, rotation_target)     # desired – actual
+
+    # # smooth, jump-free reward in [-coef, +coef]
+    # rot_reward = (rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi))**2
+    eps = 1e-6  # small value to avoid division by zero
     x, y, z, w = object_rot.unbind(-1)
     yaw_now  = torch.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
 
     xi, yi, zi, wi = object_init_rot.unbind(-1)
     yaw_init = torch.atan2(2*(wi*zi + xi*yi), 1 - 2*(yi*yi + zi*zi))
 
-    # >>> replace everything from here until rot_reward with:
-    yaw_delta = angdiff(yaw_now, yaw_init)              # (B,) signed Δyaw
-    yaw_error = angdiff(yaw_delta, rotation_target)     # desired – actual
+    yaw_delta  = angdiff(yaw_now, yaw_init)                  # (B,)
+    yaw_error  = angdiff(yaw_delta, rotation_target)         # signed error
 
-    # smooth, jump-free reward in [-coef, +coef]
-    rot_reward = (rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi))**2
+    rot_dist   = torch.abs(yaw_error)                        # d(q_t, q_goal)
+    rot_reward = 1.0 / (rot_dist + eps)                      # 1/(d+ε)
     # print("rot_reward ", rot_reward[0])
 
     # ------------------------------------------------------------ #
@@ -2917,7 +2929,7 @@ def compute_hand_reward_baseline(
     resets = torch.where(fall | timed, torch.ones_like(reset_buf), reset_buf)
     rew    = torch.where(fall, rew + fall_penalty, rew)
     bonus_tol_rad = math.radians(5.0)  # 5 degrees in radians
-    bonus_coef = 300
+    bonus_coef = 10000
 
     close_yaw = torch.abs(yaw_error) < bonus_tol_rad     # e.g. bonus_tol_rad = 5° ≈ 0.0873
     give_bonus = timed & (~fall) & close_yaw             # ONLY when timed-out cleanly

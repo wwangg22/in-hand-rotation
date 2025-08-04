@@ -215,7 +215,7 @@ class DistillWarmUpTrainer:
                 net.eval()                  # optional: deterministic BN / Dropout
             
             high_level_build_config = {
-                'actions_num' : self.actions_num+1,#for high level we control mixture between rotation and translation and also residual actions
+                'actions_num' : self.actions_num+2,#for high level we control mixture between rotation and translation and also residual actions
                 'input_shape' : self.teacher_obs_shape,
                 'num_seqs' : self.num_actors * self.num_agents,
                 'value_size': self.env_info.get('value_size',1),
@@ -974,15 +974,25 @@ class DistillWarmUpTrainer:
 
             if self.high_level_planner:
                 rotation_res_dict, translation_res_dict, res_dict= self.get_action_values(net, teacher_obs, mode="teacher") 
-                raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
-                w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
-                residual = res_dict['actions'][:, :-1]         # (N, act_dim)
+                # raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
+                # w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
+                # residual = res_dict['actions'][:, :-1]         # (N, act_dim)
 
+                # actions = (
+                #     translation_res_dict['actions'] * (1.0 - w) +
+                #     rotation_res_dict['actions']    * w         +
+                #     residual
+                # )
+                raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
+                raw_control = res_dict['actions'][:, -2:-1]          # (N, act_dim-2)
+                w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
+                residual = res_dict['actions'][:, :-2]         # (N, act_dim)
                 actions = (
-                    translation_res_dict['actions'] * (1.0 - w) +
-                    rotation_res_dict['actions']    * w         +
+                    raw_control * (translation_res_dict['actions'] * (1.0 - w) +
+                    rotation_res_dict['actions']    * w )        +
                     residual
                 )
+
             else:
                 res     = self.get_action_values(net, teacher_obs, mode="teacher")
                 actions = torch.clamp(res["actions"], -1.0, 1.0)
