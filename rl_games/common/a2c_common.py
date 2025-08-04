@@ -369,8 +369,25 @@ class A2CBase(BaseAlgorithm):
 			if self.high_level_planner:
 				self.rotation_policy.eval()
 				self.translation_policy.eval()
-				rotation_res_dict = self.rotation_policy(input_dict)
-				translation_res_dict = self.translation_policy(input_dict)
+
+				# deep copies so nested tensors are independent
+				rotation_input    = copy.deepcopy(input_dict)
+				translation_input = copy.deepcopy(input_dict)
+
+				x = rotation_input['obs']['obs']
+				B, device = x.shape[0], x.device
+
+				rotation_input   ['obs']['obs'][:, 61:85] = \
+					torch.tensor([0,0,1], device=device).repeat(B, 8)
+				translation_input['obs']['obs'][:, 61:85] = \
+					torch.tensor([0,-1,0], device=device).repeat(B, 8)
+
+				rotation_res_dict    = self.rotation_policy(rotation_input)
+				translation_res_dict = self.translation_policy(translation_input)
+
+				rotation_res_dict = self.rotation_policy(rotation_input)
+				translation_res_dict = self.translation_policy(translation_input)
+				translation_res_dict={}
 				res_dict = self.model(input_dict, latent=rotation_res_dict['latent_vec'])
 			else:
 				res_dict = self.model(input_dict)
@@ -749,6 +766,11 @@ class A2CBase(BaseAlgorithm):
 					rotation_res_dict['actions']    * w )        +
 					residual
 				)
+				# final_actions = (
+				# 	(raw_control * rotation_res_dict['actions'] )        +
+				# 	residual 
+				# )
+				
 
 				# overwrite for env_step
 				res_dict['actions'] = final_actions

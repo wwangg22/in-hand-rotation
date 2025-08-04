@@ -1794,11 +1794,11 @@ class AllegroArmMOAR(VecTask):
             if self.rotation_axis == "translation":
                 self.last_obs_buf[:, 61:85] = self.translation_axis.repeat(1, 8)
             elif self.rotation_axis == "baseline":
-                # xi, yi, zi, wi = self.object_init_quat.unbind(-1)        # (B,)
-                # yaw_init = torch.atan2(2*(wi*zi + xi*yi),
-                #                     1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
-                # self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
-                # self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
+                xi, yi, zi, wi = self.object_init_quat.unbind(-1)        # (B,)
+                yaw_init = torch.atan2(2*(wi*zi + xi*yi),
+                                    1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
+                self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
+                self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
                 repeats = 6
                 sin_rot = torch.sin(self.rotation_target).unsqueeze(1).repeat(1, repeats)
                 cos_rot = torch.cos(self.rotation_target).unsqueeze(1).repeat(1, repeats)
@@ -1810,6 +1810,17 @@ class AllegroArmMOAR(VecTask):
 
                 sin_yaw0 = torch.sin(yaw_init).unsqueeze(1).repeat(1, repeats)
                 cos_yaw0 = torch.cos(yaw_init).unsqueeze(1).repeat(1, repeats)
+                # 1) target quaternion  Δq   (about Z)
+                # delta_q = quat_from_yaw(self.rotation_target)               # (B,4)
+                # # 2) object_init_quat is xyzw already → q_goal = Δq ⊗ q_init
+                # q_goal  = quat_mul(delta_q, self.object_init_quat)          # (B,4)
+                # # 3) Goal pose vector (keep current xyz so only yaw matters)
+                # batch_sz = q_goal.shape[0]
+                # target_pose = torch.cat((self.palm_center.unsqueeze(0).repeat(batch_sz, 1), q_goal), dim=-1)     # (B,7)
+
+                # obj_vel_zero = torch.zeros_like(self.object_linvel, device=self.device)
+                # obj_angvel_zero = torch.zeros_like(self.object_angvel, device=self.device)
+                # obj_semantics = torch.tensor([0.3, 0.0, 0.0], device=self.device).repeat(batch_sz, 1)  # mass, μ, scale
 
                 # ─── Pack into observation buffer ──────────────────────────────────
                 # [61:73)   → 12 floats  (sin Δψ)
@@ -1820,6 +1831,13 @@ class AllegroArmMOAR(VecTask):
                 self.last_obs_buf[:, 67:73]  = cos_rot
                 self.last_obs_buf[:, 73:79]  = sin_yaw0
                 self.last_obs_buf[:, 79:85] = cos_yaw0
+                # self.last_obs_buf[:, 61:68] = target_pose
+                # self.last_obs_buf[:, 68:71] = obj_vel_zero
+                # self.last_obs_buf[:, 71:74] = obj_angvel_zero
+                # self.last_obs_buf[:, 74:77] = obj_semantics
+                # self.last_obs_buf[:, 77:85] = 0
+
+
                 # print("yaw init mean, max,min, std:", yaw_init.mean().item(), yaw_init.max().item(), yaw_init.min().item(), yaw_init.std().item())
             else:
                 self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)  # 24-wide
@@ -2756,9 +2774,21 @@ class AllegroArmMOAR(VecTask):
                                                     gymapi.Vec3(*color))
 
 
+
 #####################################################################
 ###=========================jit functions=========================###
 #####################################################################
+@torch.jit.script
+def quat_from_yaw(yaw: torch.Tensor) -> torch.Tensor:      # (B,) → (B,4)
+    """
+    `yaw` rad  →  quaternion that rotates `yaw` about +Z, XYZW order.
+    """
+    half = 0.5 * yaw
+    z = torch.sin(half)
+    w = torch.cos(half)
+    zeros = torch.zeros_like(z)
+    return torch.stack((zeros, zeros, z, w), dim=-1)       # (B,4)
+
 @torch.jit.script
 def body_axis_world_z(q_tgt: torch.Tensor, axis_body: torch.Tensor) -> torch.Tensor:
     """
