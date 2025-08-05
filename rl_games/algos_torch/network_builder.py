@@ -359,7 +359,7 @@ class A2CBuilder(NetworkBuilder):
                 else:
                     sigma_init(self.sigma.weight)  
 
-        def forward(self, obs_dict, latent=None):
+        def forward(self, obs_dict, latent=None, encode_state=None):
             if isinstance(obs_dict['obs'], dict):
                 #create a torch tensor with shape obs_dict but add 16 dim on the last dimension
                 obs_shape = list(obs_dict['obs']['obs'].shape)
@@ -370,6 +370,8 @@ class A2CBuilder(NetworkBuilder):
                 latent_vec = self.object_enc(obs[:, -16:]) if latent is None else latent
                 
                 new_obs[:, -16:-8] = latent_vec 
+
+                encoded_latent = self.object_enc(encode_state) if encode_state is not None else None
                 # print(obs.shape, obs_dict['obs']['pointcloud'].shape)
                 pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['pointcloud'])
                 # print(pc_embedding.shape)
@@ -519,8 +521,8 @@ class A2CBuilder(NetworkBuilder):
                         sigma = self.sigma_act(self.sigma)
                     else:
                         sigma = self.sigma_act(self.sigma(out))
-                    return mu, mu*0 + sigma, value, states, latent_vec
-                    
+                    return mu, mu*0 + sigma, value, states, latent_vec, encoded_latent
+
         def is_separate_critic(self):
             return self.separate
 

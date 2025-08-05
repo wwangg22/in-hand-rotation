@@ -1794,48 +1794,48 @@ class AllegroArmMOAR(VecTask):
             if self.rotation_axis == "translation":
                 self.last_obs_buf[:, 61:85] = self.translation_axis.repeat(1, 8)
             elif self.rotation_axis == "baseline":
-                xi, yi, zi, wi = self.object_init_quat.unbind(-1)        # (B,)
-                yaw_init = torch.atan2(2*(wi*zi + xi*yi),
-                                    1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
-                self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
-                self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
-                repeats = 6
-                sin_rot = torch.sin(self.rotation_target).unsqueeze(1).repeat(1, repeats)
-                cos_rot = torch.cos(self.rotation_target).unsqueeze(1).repeat(1, repeats)
+                # xi, yi, zi, wi = self.object_init_quat.unbind(-1)        # (B,)
+                # yaw_init = torch.atan2(2*(wi*zi + xi*yi),
+                #                     1.0 - 2.0*(yi*yi + zi*zi))        # shape (B,)
+                # self.last_obs_buf[:, 61:73] = self.rotation_target.unsqueeze(1).repeat(1, 12)
+                # self.last_obs_buf[:, 73:85] = yaw_init.unsqueeze(1).repeat(1, 12)  # 24-wide
+                # repeats = 6
+                # sin_rot = torch.sin(self.rotation_target).unsqueeze(1).repeat(1, repeats)
+                # cos_rot = torch.cos(self.rotation_target).unsqueeze(1).repeat(1, repeats)
 
-                # 2) initial object yaw in world frame
-                xi, yi, zi, wi = self.object_init_quat.unbind(-1)            # (B,)
-                yaw_init = torch.atan2(2*(wi*zi + xi*yi),
-                                    1.0 - 2.0*(yi*yi + zi*zi))            # (B,)
+                # # 2) initial object yaw in world frame
+                # xi, yi, zi, wi = self.object_init_quat.unbind(-1)            # (B,)
+                # yaw_init = torch.atan2(2*(wi*zi + xi*yi),
+                #                     1.0 - 2.0*(yi*yi + zi*zi))            # (B,)
 
-                sin_yaw0 = torch.sin(yaw_init).unsqueeze(1).repeat(1, repeats)
-                cos_yaw0 = torch.cos(yaw_init).unsqueeze(1).repeat(1, repeats)
+                # sin_yaw0 = torch.sin(yaw_init).unsqueeze(1).repeat(1, repeats)
+                # cos_yaw0 = torch.cos(yaw_init).unsqueeze(1).repeat(1, repeats)
                 # 1) target quaternion  Δq   (about Z)
-                # delta_q = quat_from_yaw(self.rotation_target)               # (B,4)
-                # # 2) object_init_quat is xyzw already → q_goal = Δq ⊗ q_init
-                # q_goal  = quat_mul(delta_q, self.object_init_quat)          # (B,4)
-                # # 3) Goal pose vector (keep current xyz so only yaw matters)
-                # batch_sz = q_goal.shape[0]
-                # target_pose = torch.cat((self.palm_center.unsqueeze(0).repeat(batch_sz, 1), q_goal), dim=-1)     # (B,7)
+                delta_q = quat_from_yaw(self.rotation_target)               # (B,4)
+                # 2) object_init_quat is xyzw already → q_goal = Δq ⊗ q_init
+                q_goal  = quat_mul(delta_q, self.object_init_quat)          # (B,4)
+                # 3) Goal pose vector (keep current xyz so only yaw matters)
+                batch_sz = q_goal.shape[0]
+                target_pose = torch.cat((self.palm_center.unsqueeze(0).repeat(batch_sz, 1), q_goal), dim=-1)     # (B,7)
 
-                # obj_vel_zero = torch.zeros_like(self.object_linvel, device=self.device)
-                # obj_angvel_zero = torch.zeros_like(self.object_angvel, device=self.device)
-                # obj_semantics = torch.tensor([0.3, 0.0, 0.0], device=self.device).repeat(batch_sz, 1)  # mass, μ, scale
+                obj_vel_zero = torch.zeros_like(self.object_linvel, device=self.device)
+                obj_angvel_zero = torch.zeros_like(self.object_angvel, device=self.device)
+                obj_semantics = torch.tensor([0.3, 0.0, 0.0], device=self.device).repeat(batch_sz, 1)  # mass, μ, scale
 
                 # ─── Pack into observation buffer ──────────────────────────────────
                 # [61:73)   → 12 floats  (sin Δψ)
                 # [73:85)   → 12 floats  (cos Δψ)
                 # [85:97)   → 12 floats  (sin ψ₀)
                 # [97:109)  → 12 floats  (cos ψ₀)
-                self.last_obs_buf[:, 61:67]  = sin_rot
-                self.last_obs_buf[:, 67:73]  = cos_rot
-                self.last_obs_buf[:, 73:79]  = sin_yaw0
-                self.last_obs_buf[:, 79:85] = cos_yaw0
-                # self.last_obs_buf[:, 61:68] = target_pose
-                # self.last_obs_buf[:, 68:71] = obj_vel_zero
-                # self.last_obs_buf[:, 71:74] = obj_angvel_zero
-                # self.last_obs_buf[:, 74:77] = obj_semantics
-                # self.last_obs_buf[:, 77:85] = 0
+                # self.last_obs_buf[:, 61:67]  = sin_rot
+                # self.last_obs_buf[:, 67:73]  = cos_rot
+                # self.last_obs_buf[:, 73:79]  = sin_yaw0
+                # self.last_obs_buf[:, 79:85] = cos_yaw0
+                self.last_obs_buf[:, 61:68] = target_pose
+                self.last_obs_buf[:, 68:71] = obj_vel_zero
+                self.last_obs_buf[:, 71:74] = obj_angvel_zero
+                self.last_obs_buf[:, 74:77] = obj_semantics
+                self.last_obs_buf[:, 77:85] = 0
 
 
                 # print("yaw init mean, max,min, std:", yaw_init.mean().item(), yaw_init.max().item(), yaw_init.min().item(), yaw_init.std().item())
@@ -2960,7 +2960,7 @@ def compute_hand_reward_baseline(
     resets = torch.where(fall | timed, torch.ones_like(reset_buf), reset_buf)
     rew    = torch.where(fall, rew + fall_penalty, rew)
     bonus_tol_rad = math.radians(5.0)  # 5 degrees in radians
-    bonus_coef = 500
+    bonus_coef = 10000
 
     close_yaw = torch.abs(yaw_error) < bonus_tol_rad     # e.g. bonus_tol_rad = 5° ≈ 0.0873
     give_bonus = timed & (~fall) & close_yaw             # ONLY when timed-out cleanly

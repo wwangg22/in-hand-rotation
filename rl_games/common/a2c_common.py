@@ -382,12 +382,11 @@ class A2CBase(BaseAlgorithm):
 				translation_input['obs']['obs'][:, 61:85] = \
 					torch.tensor([0,-1,0], device=device).repeat(B, 8)
 
-				rotation_res_dict    = self.rotation_policy(rotation_input)
+				rotation_res_dict    = self.rotation_policy(rotation_input, encode_state=input_dict["obs"]["obs"][:, 61:77])
 				translation_res_dict = self.translation_policy(translation_input)
 
-				rotation_res_dict = self.rotation_policy(rotation_input)
-				translation_res_dict = self.translation_policy(translation_input)
-				translation_res_dict={}
+				# input_dict["obs"]["obs"][:, 61:85] = \
+				# 	rotation_res_dict['encoded_latent'].repeat(1,3) #rotation_res_dict is size (b, 8)
 				res_dict = self.model(input_dict, latent=rotation_res_dict['latent_vec'])
 			else:
 				res_dict = self.model(input_dict)
@@ -761,15 +760,15 @@ class A2CBase(BaseAlgorithm):
 				raw_control = res_dict['actions'][:, -2:-1]          # (N, act_dim-2)
 				w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
 				residual = res_dict['actions'][:, :-2]         # (N, act_dim)
-				final_actions = (
-					raw_control * (translation_res_dict['actions'] * (1.0 - w) +
-					rotation_res_dict['actions']    * w )        +
-					residual
-				)
 				# final_actions = (
-				# 	(raw_control * rotation_res_dict['actions'] )        +
-				# 	residual 
+				# 	raw_control * (translation_res_dict['actions'] * (1.0 - w) +
+				# 	rotation_res_dict['actions']    * w )        +
+				# 	residual
 				# )
+				final_actions = (
+					(raw_control * rotation_res_dict['actions'] )        +
+					residual 
+				)
 				
 
 				# overwrite for env_step

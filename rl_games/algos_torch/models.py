@@ -356,7 +356,7 @@ class ModelA2CContinuousLogStd(BaseModel):
         def get_default_rnn_state(self):
             return self.a2c_network.get_default_rnn_state()
 
-        def forward(self, input_dict, latent=None):
+        def forward(self, input_dict, latent=None, encode_state=None):
             is_train = input_dict.get('is_train', True)
             prev_actions = input_dict.get('prev_actions', None)
 
@@ -365,7 +365,7 @@ class ModelA2CContinuousLogStd(BaseModel):
             else:
                 input_dict['obs'] = self.norm_obs(input_dict['obs'])
            
-            mu, logstd, value, states, latent_vec = self.a2c_network(input_dict, latent=latent)
+            mu, logstd, value, states, latent_vec, encoded_latent = self.a2c_network(input_dict, latent=latent, encode_state=encode_state)
             
             sigma = torch.exp(logstd)
             distr = torch.distributions.Normal(mu, sigma)
@@ -380,7 +380,8 @@ class ModelA2CContinuousLogStd(BaseModel):
                     'rnn_states': states,
                     'mus': mu,
                     'sigmas': sigma,
-                    'latent_vec': latent_vec.detach() if latent_vec is not None else None
+                    'latent_vec': latent_vec.detach() if latent_vec is not None else None,
+                    'encoded_latent': encoded_latent.detach() if encoded_latent is not None else None
                 }
                 return result
             else:
@@ -394,7 +395,8 @@ class ModelA2CContinuousLogStd(BaseModel):
                     'rnn_states': states,
                     'mus': mu,
                     'sigmas': sigma,
-                    'latent_vec': latent_vec.detach() if latent_vec is not None else None
+                    'latent_vec': latent_vec.detach() if latent_vec is not None else None,
+                    'encoded_latent': encoded_latent.detach() if encoded_latent is not None else None
                 }
                 return result
 
