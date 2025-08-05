@@ -385,8 +385,8 @@ class A2CBase(BaseAlgorithm):
 				rotation_res_dict    = self.rotation_policy(rotation_input, encode_state=input_dict["obs"]["obs"][:, 61:77])
 				translation_res_dict = self.translation_policy(translation_input)
 
-				# input_dict["obs"]["obs"][:, 61:85] = \
-				# 	rotation_res_dict['encoded_latent'].repeat(1,3) #rotation_res_dict is size (b, 8)
+				input_dict["obs"]["obs"][:, 61:85] = \
+					rotation_res_dict['encoded_latent'].repeat(1,3) #rotation_res_dict is size (b, 8)
 				res_dict = self.model(input_dict, latent=rotation_res_dict['latent_vec'])
 			else:
 				res_dict = self.model(input_dict)
