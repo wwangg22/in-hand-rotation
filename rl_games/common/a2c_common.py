@@ -384,10 +384,41 @@ class A2CBase(BaseAlgorithm):
 
 				rotation_res_dict    = self.rotation_policy(rotation_input, encode_state=input_dict["obs"]["obs"][:, 61:77])
 				translation_res_dict = self.translation_policy(translation_input)
+				def quat_to_6d(q):
+					"""
+					q  : (B,4)  unit quaternion in *xyzw* order                    <-- check yours!
+					out: (B,6)  Zhou-style 6-D rotation representation
+					"""
+					# --- quaternion -> 3×3 matrix
+					x, y, z, w = q.unbind(-1)                    # split
+					B = q.shape[0]
+					R = torch.empty(B, 3, 3, device=q.device)
 
-				input_dict["obs"]["obs"][:, 61:85] = \
-					rotation_res_dict['encoded_latent'].repeat(1,3) #rotation_res_dict is size (b, 8)
-				res_dict = self.model(input_dict, latent=rotation_res_dict['latent_vec'])
+					R[:, 0, 0] = 1 - 2*(y*y + z*z)
+					R[:, 0, 1] = 2*(x*y - z*w)
+					R[:, 0, 2] = 2*(x*z + y*w)
+
+					R[:, 1, 0] = 2*(x*y + z*w)
+					R[:, 1, 1] = 1 - 2*(x*x + z*z)
+					R[:, 1, 2] = 2*(y*z - x*w)
+
+					R[:, 2, 0] = 2*(x*z - y*w)
+					R[:, 2, 1] = 2*(y*z + x*w)
+					R[:, 2, 2] = 1 - 2*(x*x + y*y)
+
+					# --- keep the first two columns and flatten
+					return R[..., :2].reshape(B, 6)              # (B,6)
+
+				# input_dict["obs"]["obs"][:, 61:85] = \
+				# 	input_dict["obs"]["obs"][:, 64:68].repeat(1,6) #rotation_res_dict is size (b, 8)
+				q_goal = input_dict["obs"]["obs"][:, 64:68]          # (B,4) xyzw
+
+				# convert to 6-D
+				goal_6d = quat_to_6d(q_goal)                         # (B,6)
+
+				# tile it four times to fill the 24-slot window 61:85
+				input_dict["obs"]["obs"][:, 61:85] = goal_6d.repeat(1, 4)   # (B,24)
+				res_dict = self.model(input_dict)
 			else:
 				res_dict = self.model(input_dict)
 			if self.has_central_value:
@@ -759,6 +790,7 @@ class A2CBase(BaseAlgorithm):
 				raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
 				raw_control = res_dict['actions'][:, -2:-1]          # (N, act_dim-2)
 				w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
+				gate = (raw_control > 0).float()
 				residual = res_dict['actions'][:, :-2]         # (N, act_dim)
 				# final_actions = (
 				# 	raw_control * (translation_res_dict['actions'] * (1.0 - w) +
@@ -766,7 +798,7 @@ class A2CBase(BaseAlgorithm):
 				# 	residual
 				# )
 				final_actions = (
-					(raw_control * rotation_res_dict['actions'] )        +
+					((gate )* rotation_res_dict['actions'] )        +
 					residual 
 				)
 				

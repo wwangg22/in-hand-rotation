@@ -64,6 +64,7 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
                 'value_size': self.env_info.get('value_size',1),
                 'normalize_value' : self.normalize_value,
                 'normalize_input': self.normalize_input,
+                '6d_quat': True,
             }
             self.model = self.network.build(high_level_build_config)
             self.model.to(self.ppo_device)
