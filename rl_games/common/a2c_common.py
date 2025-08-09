@@ -418,6 +418,15 @@ class A2CBase(BaseAlgorithm):
 
 				# tile it four times to fill the 24-slot window 61:85
 				input_dict["obs"]["obs"][:, 61:85] = goal_6d.repeat(1, 4)   # (B,24)
+
+				old_data = input_dict["obs"]["obs"][:, -16:]
+				old_quat = old_data[:, 3:7]
+				six_quat = quat_to_6d(old_quat) 
+
+				input_dict["obs"]["obs"][:, -7:] = input_dict["obs"]["obs"][:, -9:-2]
+
+				input_dict["obs"]["obs"][:, -13:-7] = six_quat
+
 				res_dict = self.model(input_dict)
 			else:
 				res_dict = self.model(input_dict)

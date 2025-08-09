@@ -59,6 +59,30 @@ def xyzw_to_wxyz(quat):
     new_quat[:, 1:] = quat[:, :-1]
     return new_quat
 
+def quat_to_6d(q):
+    """
+    q  : (B,4)  unit quaternion in *xyzw* order                    <-- check yours!
+    out: (B,6)  Zhou-style 6-D rotation representation
+    """
+    # --- quaternion -> 3×3 matrix
+    x, y, z, w = q.unbind(-1)                    # split
+    B = q.shape[0]
+    R = torch.empty(B, 3, 3, device=q.device)
+
+    R[:, 0, 0] = 1 - 2*(y*y + z*z)
+    R[:, 0, 1] = 2*(x*y - z*w)
+    R[:, 0, 2] = 2*(x*z + y*w)
+
+    R[:, 1, 0] = 2*(x*y + z*w)
+    R[:, 1, 1] = 1 - 2*(x*x + z*z)
+    R[:, 1, 2] = 2*(y*z - x*w)
+
+    R[:, 2, 0] = 2*(x*z - y*w)
+    R[:, 2, 1] = 2*(y*z + x*w)
+    R[:, 2, 2] = 1 - 2*(x*x + y*y)
+
+    # --- keep the first two columns and flatten
+    return R[..., :2].reshape(B, 6)              # (B,6)
 
 # Debug script: python ./isaacgymenvs/train.py test=False task=AllegroArmLeftContinuous pipeline=cpu
 class AllegroArmMOAR(VecTask):
@@ -1865,11 +1889,20 @@ class AllegroArmMOAR(VecTask):
             # ---------- object block appended to policy obs --------------- #
             if self.obj_buf.shape[1] != 16:        # initialise once
                 self.obj_buf = torch.zeros((self.num_envs, 16), device=self.device)
+                
+            # current_quat = self.object_pose[:, 3:7]  # [num_envs, 4]
+            # six_quat = quat_to_6d(current_quat)  # [num_envs, 6]
 
             self.obj_buf[:,  : 7]  = self.object_pose
             self.obj_buf[:,  7:10] = self.object_linvel
             self.obj_buf[:, 10:13] = self.vel_obs_scale * self.object_angvel
             self.obj_buf[:, 13:16] = self.object_semantics          # mass, μ, scale
+            
+            # self.obj_buf[:,:3] = self.object_pos[:,:3]
+            # self.obj_buf[:, 3:9] = six_quat
+            # self.obj_buf[:, 9:12] = self.object_linvel 
+            # self.obj_buf[:, 12:15] = self.vel_obs_scale * self.object_angvel
+            # self.obj_buf[:, 15:16] = self.object_semantics[:, 1:2]          # mass, μ, scale
 
             self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
 
