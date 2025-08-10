@@ -85,11 +85,12 @@ def quat_to_6d(q):
     return R[..., :2].reshape(B, 6)              # (B,6)
 
 # Debug script: python ./isaacgymenvs/train.py test=False task=AllegroArmLeftContinuous pipeline=cpu
-class AllegroArmMOAR(VecTask):
+class LEAPArmMOAR(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
         self.training = True
         self.cfg = cfg
+        self.set_defaults()
         self.object_size = self.cfg["env"]["objectSize"]
         self.randomize = self.cfg["task"]["randomize"]
         self.randomization_params = self.cfg["task"]["randomization_params"]
@@ -123,6 +124,7 @@ class AllegroArmMOAR(VecTask):
         self.force_decay = self.cfg["env"].get("forceDecay", 0.99)
         self.force_decay_interval = self.cfg["env"].get("forceDecayInterval", 0.08)
         self.rotation_axis = self.cfg["env"]["axis"]
+        self.save_init_pose = cfg['env']['genGrasps']
 
         self.randomize_friction_lower = 0.2
         self.randomize_friction_upper = 3.0
@@ -353,8 +355,8 @@ class AllegroArmMOAR(VecTask):
             self.obj_init_pos_shift = {"new": [(0.63, 0.01, 0.25), (0.63, -0.02, 0.25)]}
         else:
             self.obj_init_pos_shift = {
-                "org": (0.56, 0.0, 0.36),
-                "new": (0.63, 0.01, 0.238)  
+                "org": (0.0, 0.0, 0.09),
+                "new": (0.0, 0.0, 0.09)  
             }
 
         self.obj_init_type = self.cfg["env"].get("objInit", "org")
@@ -496,7 +498,7 @@ class AllegroArmMOAR(VecTask):
         if self.ablation_mode in ["no-tactile", "multi-modality"]:
             self.cfg["env"]["numObservations"] = 276
         self.cfg["env"]["numStates"] = num_states
-        self.cfg["env"]["numActions"] = 22
+        self.cfg["env"]["numActions"] = 16 #22
         if self.is_distillation:
             self.num_student_obs = (45 + 16 + 24) * self.n_stack
 
@@ -566,7 +568,7 @@ class AllegroArmMOAR(VecTask):
 
         # Contact.
         self.gym.refresh_net_contact_force_tensor(self.sim)
-
+        print("REAL LEAP ARM MOAR")
         # create some wrapper tensors for different slices
         self.spin_axis = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device)
         self.arm_hand_default_dof_pos = torch.zeros(self.num_arm_hand_dofs, dtype=torch.float, device=self.device)
@@ -601,7 +603,7 @@ class AllegroArmMOAR(VecTask):
             # if self.object_set_id == "custom":
             #     self.all_spin_choices = torch.tensor([[1.0, 0.0, 0.0]], device=self.device)
             # else:
-            self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0]], device=self.device)
+            self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0],[0.0, 0.0, -1.0]], device=self.device)
 
         elif self.rotation_axis == "custom":
             self.all_spin_choices = torch.tensor([[0.0, 0.0, 1.0]], device=self.device)
@@ -620,7 +622,8 @@ class AllegroArmMOAR(VecTask):
         self.num_dofs = self.gym.get_sim_dof_count(self.sim) // self.num_envs
         print("Num dofs: ", self.num_dofs)
 
-        self.last_actions = torch.zeros((self.num_envs, 22), dtype=torch.float, device=self.device)
+        # self.last_actions = torch.zeros((self.num_envs, 22), dtype=torch.float, device=self.device)
+        self.last_actions = torch.zeros((self.num_envs, self.num_actions), dtype=torch.float, device=self.device)
         self.prev_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.cur_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
 
@@ -636,8 +639,8 @@ class AllegroArmMOAR(VecTask):
         self.z_unit_tensor = to_torch([0, 0, 1], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
         self.relative_scale_tensor = torch.full((self.num_envs, 1), self.relative_scale, device=self.device)
 
-        self.p_gain_val = 100.0
-        self.d_gain_val = 4.0
+        self.p_gain_val = self.cfg['env']['controller'].get("p_gain", 4.0)
+        self.d_gain_val = self.cfg['env']['controller'].get("d_gain", 0.1)
         self.p_gain = torch.ones((self.num_envs, self.num_actions), device=self.device, dtype=torch.float) * self.p_gain_val
         self.d_gain = torch.ones((self.num_envs, self.num_actions), device=self.device, dtype=torch.float) * self.d_gain_val
 
@@ -667,6 +670,55 @@ class AllegroArmMOAR(VecTask):
         self.debug_qpos = []
 
         self.post_init()
+    
+    def set_defaults(self):
+        if "include_pd_gains" not in self.cfg["env"]:
+            self.cfg["env"]["include_pd_gains"] = False
+
+        if "include_friction_coefficient" not in self.cfg["env"]:
+            self.cfg["env"]["include_friction_coefficient"] = False
+
+        if "include_obj_scales" not in self.cfg["env"]:
+            self.cfg["env"]["include_obj_scales"] = False
+
+        if "leap_hand_start_z" not in self.cfg["env"]:
+            self.cfg["env"]["leap_hand_start_z"] = 0.5
+        
+        if "grasp_dof_search_radius" not in self.cfg["env"]:
+            self.cfg["env"]["grasp_dof_search_radius"] = 0.25
+
+        if "obs_mask" not in self.cfg["env"]:
+            self.cfg["env"]["obs_mask"] = None
+
+        if "include_targets" not in self.cfg["env"]:
+            self.cfg["env"]["include_targets"] = True
+        
+        if "include_obj_pose" not in self.cfg["env"]:
+            self.cfg["env"]["include_obj_pose"] = False
+
+        if "include_history" not in self.cfg["env"]:
+            self.cfg["env"]["include_history"] = True
+
+        if "joint_limits" not in self.cfg["env"]["randomization"]:
+            self.cfg["env"]["randomization"]["joint_limits"] = 0
+
+        if "mask_body_collision" not in self.cfg["env"]:
+            self.cfg["env"]["mask_body_collision"] = {}        
+    
+        if "disable_actions" not in self.cfg["env"]:
+            self.cfg["env"]["disable_actions"] = False
+
+        if "disable_gravity" not in self.cfg["env"]:
+            self.cfg["env"]["disable_gravity"] = False
+
+        if "disable_object_collision" not in self.cfg["env"]:
+            self.cfg["env"]["disable_object_collision"] = False
+
+        if "disable_resets" not in self.cfg["env"]:
+            self.cfg["env"]["disable_resets"] = False
+
+        if "disable_self_collision" not in self.cfg["env"]:
+            self.cfg["env"]["disable_self_collision"] = False
 
     def get_internal_state(self):
         return self.root_state_tensor[self.object_indices, 3:7]
@@ -737,16 +789,90 @@ class AllegroArmMOAR(VecTask):
 
             self.object_rb_count = self.gym.get_asset_rigid_body_count(object_asset)
 
+    def _create_object_asset(self):
+        # object file to asset
+        asset_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets')
+        hand_asset_file = self.cfg['env']['asset']['leap_hand_asset']
+        # load hand asset
+        hand_asset_options = gymapi.AssetOptions()
+        hand_asset_options.flip_visual_attachments = False
+        hand_asset_options.fix_base_link = True
+        hand_asset_options.collapse_fixed_joints = True
+        hand_asset_options.disable_gravity = False
+        hand_asset_options.thickness = 0.001
+        hand_asset_options.angular_damping = 0.01
+
+        # Convex decomposition
+        hand_asset_options.vhacd_enabled = True
+        hand_asset_options.vhacd_params.resolution = 300000
+        # hand_asset_options.vhacd_params.max_convex_hulls = 30
+        # hand_asset_options.vhacd_params.max_num_vertices_per_ch = 64
+
+        hand_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_POS
+        self.hand_asset = self.gym.load_asset(self.sim, asset_root, hand_asset_file, hand_asset_options)
+        
+        if "leap_hand" in hand_asset_file:
+            rsp = self.gym.get_asset_rigid_shape_properties(self.hand_asset)   
+
+            for i, (_, body_group) in enumerate(self.cfg["env"]["mask_body_collision"].items()):
+                filter_value = 2 ** i
+
+                for body_idx in body_group:
+                    start, count = self.body_shape_indices[body_idx]
+                    
+                    for idx in range(count):
+                        rsp[idx + start].filter = rsp[idx + start].filter | filter_value 
+
+            if self.cfg["env"]["disable_self_collision"]: # Disable all collisions
+                for i in range(len(rsp)):
+                    rsp[i].filter = 1
+
+            self.gym.set_asset_rigid_shape_properties(self.hand_asset, rsp)
+
+    def _init_object_pose(self):
+        leap_hand_start_pose = gymapi.Transform()
+        leap_hand_start_pose.p = gymapi.Vec3(0, 0, self.cfg["env"]["leap_hand_start_z"])
+
+        leap_hand_start_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(1, 0, 0), np.pi) 
+        object_start_pose = gymapi.Transform()
+        object_start_pose.p = gymapi.Vec3()
+        object_start_pose.p.x = leap_hand_start_pose.p.x
+        pose_dx, pose_dy, pose_dz = -0.01, -0.04, 0.15
+
+        if "override_object_init_x" in self.cfg["env"]:
+            pose_dx = self.cfg["env"]["override_object_init_x"]
+
+        if "override_object_init_y" in self.cfg["env"]:
+            pose_dy = self.cfg["env"]["override_object_init_y"]
+
+        object_start_pose.p.x = leap_hand_start_pose.p.x + pose_dx
+        object_start_pose.p.y = leap_hand_start_pose.p.y + pose_dy
+        object_start_pose.p.z = leap_hand_start_pose.p.z + pose_dz
+
+        # for grasp pose generation, it is used to initialize the object
+        # it should be slightly higher than the fingertip
+        # so it is set to be 0.66 for internal leap and 0.64 for the public leap
+        # ----
+        # for in-hand object rotation, the initialization of z is only used in the first step
+        # it is set to be 0.65 for backward compatibility
+        object_z = 0.66 if self.save_init_pose else 0.65
+
+        object_start_pose.p.z = object_z
+
+        if "override_object_init_z" in self.cfg["env"]:
+            object_start_pose.p.z = self.cfg["env"]["override_object_init_z"] 
+
+        return leap_hand_start_pose, object_start_pose
     def _create_envs(self, num_envs, spacing, num_per_row):
         lower = gymapi.Vec3(-spacing, -spacing, 0.0)
         upper = gymapi.Vec3(spacing, spacing, spacing)
 
         asset_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets')
 
-        if self.object_set_id == "ball":
-            arm_hand_asset_file = "urdf/xarm6/xarm6_allegro_right_fsr_2023_thin_tilted.urdf"
-        else:
-            arm_hand_asset_file = self.robot_asset_files_dict[self.cfg["env"]["sensor"]]
+        # if self.object_set_id == "ball":
+        #     arm_hand_asset_file = "urdf/xarm6/xarm6_allegro_right_fsr_2023_thin_tilted.urdf"
+        # else:
+        #     arm_hand_asset_file = self.robot_asset_files_dict[self.cfg["env"]["sensor"]]
 
         if self.object_set_id == "working":
             self.pc_num_points = self.cfg['env'].get('pc_num_points', 100)
@@ -758,25 +884,28 @@ class AllegroArmMOAR(VecTask):
             self.mesh_sampler = functools.lru_cache(maxsize=None)(
                     lambda fname: torch.as_tensor(
                         trimesh.load(fname, force='mesh').vertices, dtype=torch.float32))
+        self._create_object_asset()
+        # arm_hand_asset_file = self.hand_asset
+        arm_hand_asset = self.hand_asset
 
         if "asset" in self.cfg["env"]:
             asset_root = self.cfg["env"]["asset"].get("assetRoot", asset_root)
         
         self.asset_root = asset_root
         # load arm and hand.
-        asset_options = gymapi.AssetOptions()
-        asset_options.flip_visual_attachments = False
-        asset_options.fix_base_link = True
-        asset_options.collapse_fixed_joints = False
-        asset_options.disable_gravity = True
-        asset_options.thickness = 0.001
-        asset_options.angular_damping = 0.01
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_EFFORT
+        # asset_options = gymapi.AssetOptions()
+        # asset_options.flip_visual_attachments = False
+        # asset_options.fix_base_link = True
+        # asset_options.collapse_fixed_joints = False
+        # asset_options.disable_gravity = True
+        # asset_options.thickness = 0.001
+        # asset_options.angular_damping = 0.01
+        # asset_options.default_dof_drive_mode = gymapi.DOF_MODE_EFFORT
 
-        if self.physics_engine == gymapi.SIM_PHYSX:
-            asset_options.use_physx_armature = True
+        # if self.physics_engine == gymapi.SIM_PHYSX:
+        #     asset_options.use_physx_armature = True
 
-        arm_hand_asset = self.gym.load_asset(self.sim, asset_root, arm_hand_asset_file, asset_options)
+        # arm_hand_asset = self.gym.load_asset(self.sim, asset_root, arm_hand_asset_file, asset_options)
         self.num_arm_hand_bodies = self.gym.get_asset_rigid_body_count(arm_hand_asset)
         self.num_arm_hand_shapes = self.gym.get_asset_rigid_shape_count(arm_hand_asset)
         self.num_arm_hand_dofs = self.gym.get_asset_dof_count(arm_hand_asset)
@@ -797,54 +926,65 @@ class AllegroArmMOAR(VecTask):
         robot_dof_props = self.gym.get_asset_dof_properties(arm_hand_asset)
 
         # This part is very important (damping)
-        for i in range(22):
+        # for i in range(22):
+        for i in range(self.num_arm_hand_dofs):
+            # robot_lower_qpos.append(robot_dof_props['lower'][i])
+            # robot_upper_qpos.append(robot_dof_props['upper'][i])
+            # robot_dof_props['effort'][i] = 0.5
+            # robot_dof_props['stiffness'][i] = self.cfg['env']['controller']['pgain']
+            # robot_dof_props['damping'][i] = self.cfg['env']['controller']['dgain']
+            # robot_dof_props['friction'][i] = 0.01
+            # robot_dof_props['armature'][i] = 0.001
             robot_dof_props['driveMode'][i] = gymapi.DOF_MODE_EFFORT
-            if i < 6:
-                robot_dof_props['velocity'][i] = 1.0
-            else:
-                robot_dof_props['velocity'][i] = 3.14
+
+            robot_dof_props['velocity'][i] = 3.14
 
             robot_dof_props['effort'][i] = 20.0
 
-            robot_dof_props['friction'][i] = 0.1
+            robot_dof_props['friction'][i] = 0.01
             robot_dof_props['stiffness'][i] = 0  
-            robot_dof_props['armature'][i] = 0.1
+            robot_dof_props['armature'][i] = 0.001
 
-            if i < 6:
-                robot_dof_props['damping'][i] = 100.0
-            else:
-                robot_dof_props['damping'][i] = 0.0 
+
+            robot_dof_props['damping'][i] = 0.0 
             robot_lower_qpos.append(robot_dof_props['lower'][i])
             robot_upper_qpos.append(robot_dof_props['upper'][i])
 
+
+
         self.actuated_dof_indices = to_torch(self.actuated_dof_indices, dtype=torch.long, device=self.device)
-        self.arm_hand_dof_lower_limits = to_torch(robot_lower_qpos, device=self.device)
-        self.arm_hand_dof_upper_limits = to_torch(robot_upper_qpos, device=self.device)
-        self.arm_hand_dof_lower_qvel = to_torch(-robot_dof_props["velocity"], device=self.device)
-        self.arm_hand_dof_upper_qvel = to_torch(robot_dof_props["velocity"], device=self.device)
+        self.arm_hand_dof_lower_limits = to_torch(robot_lower_qpos, device=self.device).repeat((self.num_envs, 1))  
+        self.arm_hand_dof_lower_limits += (2 * torch.rand_like(self.arm_hand_dof_lower_limits) - 1) * self.cfg["env"]["randomization"]["joint_limits"]
+        self.arm_hand_dof_upper_limits = to_torch(robot_upper_qpos, device=self.device).repeat((self.num_envs, 1))  
+        self.arm_hand_dof_upper_limits += (2 * torch.rand_like(self.arm_hand_dof_upper_limits) - 1) * self.cfg["env"]["randomization"]["joint_limits"]
+        self.arm_hand_dof_lower_qvel = to_torch(-robot_dof_props["velocity"], device=self.device).repeat((self.num_envs, 1)) 
+        self.arm_hand_dof_upper_qvel = to_torch(robot_dof_props["velocity"], device=self.device).repeat((self.num_envs, 1)) 
 
         print("DOF_LOWER_LIMITS", robot_lower_qpos)
         print("DOF_UPPER_LIMITS", robot_upper_qpos)
 
+        hand_pose, obj_pose = self._init_object_pose()
+
         # Set up default arm position.
-        self.default_arm_pos = [0.00, 1.183, -1.541, 3.1416, 2.742, -1.569]  
+        # self.default_arm_pos = [0.00, 1.183, -1.541, 3.1416, 2.742, -1.569]  
 
         for i in range(self.num_arm_hand_dofs):
-            if i < 6:
-                self.arm_hand_dof_default_pos.append(self.default_arm_pos[i])
-            elif self.object_set_id == "ball" and i in [7, 15, 19]:
-                self.arm_hand_dof_default_pos.append(1.0)
-            else:
-                self.arm_hand_dof_default_pos.append(0.0)
+            # if i < 6:
+            #     self.arm_hand_dof_default_pos.append(self.default_arm_pos[i])
+            # elif self.object_set_id == "ball" and i in [7, 15, 19]:
+            #     self.arm_hand_dof_default_pos.append(1.0)
+            # else:
+            self.arm_hand_dof_default_pos.append(0.0)
             self.arm_hand_dof_default_vel.append(0.0)
 
         self.arm_hand_dof_default_pos = to_torch(self.arm_hand_dof_default_pos, device=self.device)
         self.arm_hand_dof_default_vel = to_torch(self.arm_hand_dof_default_vel, device=self.device)
 
         # Put objects in the scene.
-        arm_hand_start_pose = gymapi.Transform()
-        arm_hand_start_pose.p = gymapi.Vec3(0, 0.0, 0.0)
-        arm_hand_start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
+        # arm_hand_start_pose = gymapi.Transform()
+        # arm_hand_start_pose.p = gymapi.Vec3(0, 0.0, 0.0)
+        # arm_hand_start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
+        arm_hand_start_pose = hand_pose
 
 
         if self.obs_type == "full_stack_baoding" or self.obs_type == "partial_stack_baoding":
@@ -1124,21 +1264,21 @@ class AllegroArmMOAR(VecTask):
         print("3: ", max(self.object_semantics[:,2]), min(self.object_semantics[:,2]))
         self.object_class_indices_tensor = torch.tensor(self.object_class_indices, dtype=torch.long, device=self.device)
 
-        palm_handles = self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, self.palm_name)
-        self.palm_indices = to_torch(palm_handles, dtype=torch.int64)
+        # palm_handles = self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, self.palm_name)
+        # self.palm_indices = to_torch(palm_handles, dtype=torch.int64)
 
-        sensor_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, sensor_name)
-                          for sensor_name in self.contact_sensor_names]
-        self.sensor_handle_indices = to_torch(sensor_handles, dtype=torch.int64)
+        # sensor_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, sensor_name)
+        #                   for sensor_name in self.contact_sensor_names]
+        # self.sensor_handle_indices = to_torch(sensor_handles, dtype=torch.int64)
 
-        arm_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, sensor_name)
-                          for sensor_name in self.arm_sensor_names]
-        self.arm_handle_indices = to_torch(arm_handles, dtype=torch.int64)
+        # arm_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, sensor_name)
+        #                   for sensor_name in self.arm_sensor_names]
+        # self.arm_handle_indices = to_torch(arm_handles, dtype=torch.int64)
 
-        tip_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, sensor_name)
-                       for sensor_name in self.tip_sensor_names]
+        # tip_handles = [self.gym.find_actor_rigid_body_handle(env_ptr, arm_hand_actor, sensor_name)
+        #                for sensor_name in self.tip_sensor_names]
 
-        self.fingertip_handles = to_torch(tip_handles, dtype=torch.int64)
+        # self.fingertip_handles = to_torch(tip_handles, dtype=torch.int64)
 
         self.object_class_indices = to_torch(self.object_class_indices, dtype=torch.int64) 
         self.object_one_hot_vector = F.one_hot(self.object_class_indices, num_classes=self.num_training_objects).float()
@@ -1175,12 +1315,12 @@ class AllegroArmMOAR(VecTask):
             all_qpos[idx] = qpos
 
         for i in range(self.num_arm_hand_dofs):
-            if i < 6:
-                arm_hand_dof_default_pos.append(self.default_arm_pos[i])
-            elif i in all_qpos:
-                arm_hand_dof_default_pos.append(all_qpos[i])
-            else:
-                arm_hand_dof_default_pos.append(0.0)
+            # if i < 6:
+            #     arm_hand_dof_default_pos.append(self.default_arm_pos[i])
+            # elif i in all_qpos:
+            #     arm_hand_dof_default_pos.append(all_qpos[i])
+            # else:
+            arm_hand_dof_default_pos.append(0.0)
             arm_hand_dof_default_vel.append(0.0)
 
         self.arm_hand_dof_default_pos = to_torch(arm_hand_dof_default_pos, device=self.device)
@@ -1365,11 +1505,11 @@ class AllegroArmMOAR(VecTask):
                     self.rew_buf, self.reset_buf, self.progress_buf,
                     self.successes, self.consecutive_successes,
                     float(self.max_episode_length),
-                    self.fingertip_pos, self.object_pos, self.object_rot,
+                     self.object_pos, self.object_rot,
                     self.object_init_pos, self.object_init_quat,
                     self.object_linvel, self.object_angvel,
                     self.goal_pos, self.goal_rot,
-                    self.finger_contacts, self.tip_contacts,
+                     self.tip_contacts,
                     self.control_error, self.actions, self.action_penalty_scale,
                     self.success_tolerance, self.fall_dist, self.fall_penalty,
                     torque_penalty, work_penalty,
@@ -1454,10 +1594,10 @@ class AllegroArmMOAR(VecTask):
                         torch.tensor(self.finger_coef).to(self.device),
                         self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
                         self.consecutive_successes,
-                        self.max_episode_length, self.fingertip_pos, self.object_pos, relative_rot, self.object_init_pos,
+                        self.max_episode_length, self.object_pos, relative_rot, self.object_init_pos,
                         init_relative_rot, self.object_linvel,
                         self.object_angvel,
-                        self.goal_pos, self.goal_rot, self.finger_contacts, self.tip_contacts, self.contact_coef,
+                        self.goal_pos, self.goal_rot, self.tip_contacts, self.contact_coef,
                         self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.control_error,
                         self.control_penalty_scale, self.actions, self.action_penalty_scale,
                         self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty, self.spin_axis,
@@ -1480,10 +1620,10 @@ class AllegroArmMOAR(VecTask):
                         torch.tensor(self.finger_coef).to(self.device),
                         self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
                         self.consecutive_successes,
-                        self.max_episode_length, self.fingertip_pos, self.object_pos, self.object_rot, self.object_init_pos,
+                        self.max_episode_length, self.object_pos, self.object_rot, self.object_init_pos,
                         self.object_init_state[: , 3:7], self.object_linvel,
                         self.object_angvel,
-                        self.goal_pos, self.goal_rot, self.finger_contacts, self.tip_contacts, self.contact_coef,
+                        self.goal_pos, self.goal_rot, self.tip_contacts, self.contact_coef,
                         self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.control_error,
                         self.control_penalty_scale, self.actions, self.action_penalty_scale,
                         self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty, self.spin_axis,
@@ -1528,205 +1668,19 @@ class AllegroArmMOAR(VecTask):
         self.goal_pos = self.goal_states[:, ..., 0:3]
         self.goal_rot = self.goal_states[:, ..., 3:7]
 
-        self.fingertip_pos = self.rigid_body_states[:, self.fingertip_handles][:, :, 0:3]
+        # self.fingertip_pos = self.rigid_body_states[:, self.fingertip_handles][:, :, 0:3]
 
-        if self.obs_type == "partial_stack":
-            self.compute_contact_observations('ps')
-        elif self.obs_type == "full_stack":
-            self.compute_contact_observations('fs')
-        elif self.obs_type == "full_stack_obj_sem":
+        if self.obs_type == "full_stack_obj_sem":
             self.compute_contact_observations('fsos')
         elif self.obs_type == "full_stack_pointcloud":
             self.compute_contact_observations('fspc')
-        elif self.obs_type == "partial_stack_pointcloud":
-            self.compute_contact_observations('pspc')
-        elif self.obs_type == "full_stack_baoding":
-            self.compute_contact_observations('fsbd')
-        elif self.obs_type == "partial_stack_baoding":
-            self.compute_contact_observations('psbd')
         else:
             print("Unknown observations type!")
 
     def compute_contact_observations(self, mode='full'):
-        if mode == 'ps':
-            if self.asymmetric_obs:
-                self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                       self.arm_hand_dof_lower_limits,
-                                                                       self.arm_hand_dof_upper_limits)
-                self.states_buf[:, self.num_arm_hand_dofs:2 * self.num_arm_hand_dofs] = self.vel_obs_scale * self.arm_hand_dof_vel
-                self.states_buf[:, 2 * self.num_arm_hand_dofs:3 * self.num_arm_hand_dofs] = self.force_torque_obs_scale * self.dof_force_tensor
-
-                obj_obs_start = 3 * self.num_arm_hand_dofs  # 66
-                self.states_buf[:, obj_obs_start:obj_obs_start + 7] = self.object_pose
-                self.states_buf[:, obj_obs_start + 7:obj_obs_start + 10] = self.object_linvel
-                self.states_buf[:, obj_obs_start + 10:obj_obs_start + 13] = self.vel_obs_scale * self.object_angvel
-
-                obs_end = 79 
-                self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
-                self.states_buf[:, obs_end + self.num_actions: obs_end + self.num_actions + 24] = self.spin_axis.repeat(1, 8)
-
-                all_contact = self.contact_tensor.reshape(-1, 49, 3).clone()
-                all_contact = torch.norm(all_contact, dim=-1).float()
-                all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact), all_contact / 20.0)
-                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + 49] = all_contact
-                self.states_buf[:, obs_end + self.num_actions + 24 + 49:
-                                   obs_end + self.num_actions + 24 + 49 + self.num_training_objects] = self.object_one_hot_vector
-
-                end_pos = obs_end + self.num_actions + 24 + 49 + self.num_training_objects
-                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
-
-            self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                self.arm_hand_dof_lower_limits,
-                                                                self.arm_hand_dof_upper_limits)
-            self.last_obs_buf[:, 0:6] = 0.0
-
-            self.last_obs_buf[:, 22:45] = 0
-
-            contacts = self.contact_tensor.reshape(-1, 49, 3).clone() 
-            contacts = contacts[:, self.sensor_handle_indices, :]
-            tip_contacts = contacts[:, self.fingertip_indices, :]
-
-            contacts = torch.norm(contacts, dim=-1)
-            tip_contacts = torch.norm(tip_contacts, dim=-1)
-            gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
-            tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
-
-            # we use some randomized threshold.
-            # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
-            contacts = torch.where(contacts >= self.contact_thresh, 1.0, 0.0)
-
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
-            self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
-
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
-
-            # random mask out the signal.
-            sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
-            if self.use_disable:
-                sensed_contacts[:, self.disable_sensor_idxes] = 0
-            # Do some data augmentation to the contact....
-            self.sensed_contacts = sensed_contacts
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_contacts.detach().cpu().numpy()
-
-            self.last_obs_buf[:, 45:61] = sensed_contacts
-            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)
-
-            # Observation randomization.
-            self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
-
-
-            self.last_obs_buf[:, 22:23+6] =  0 
-            self.last_obs_buf[:, 23+6:23+22] = unscale(self.prev_targets,
-                                                       self.arm_hand_dof_lower_limits,
-                                                       self.arm_hand_dof_upper_limits)[:, 6:22]
-
-            init_obs_ids = torch.where(self.init_stack_buf == 1)
-            self.init_stack_buf[init_obs_ids] = 0
-            self.obs_buf[init_obs_ids] = self.last_obs_buf[init_obs_ids].repeat(1, self.n_stack)
-            self.obs_buf = torch.cat((self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim]), dim=-1)
-            self.finger_contacts = gt_contacts
-            self.tip_contacts = tip_contacts
-            
-            if self.is_distillation:
-                self.student_obs_buf[:, :] = self.obs_buf.clone()
-
-        elif mode == 'fs':
-            contacts = 48
-            if self.asymmetric_obs:
-                self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                       self.arm_hand_dof_lower_limits,
-                                                                       self.arm_hand_dof_upper_limits)
-                self.states_buf[:, self.num_arm_hand_dofs:2 * self.num_arm_hand_dofs] = self.vel_obs_scale * self.arm_hand_dof_vel
-                self.states_buf[:, 2 * self.num_arm_hand_dofs:3 * self.num_arm_hand_dofs] = self.force_torque_obs_scale * self.dof_force_tensor
-
-                obj_obs_start = 3 * self.num_arm_hand_dofs  
-                self.states_buf[:, obj_obs_start:obj_obs_start + 7] = self.object_pose
-                self.states_buf[:, obj_obs_start + 7:obj_obs_start + 10] = self.object_linvel
-                self.states_buf[:, obj_obs_start + 10:obj_obs_start + 13] = self.vel_obs_scale * self.object_angvel
-
-                obs_end = 79 
-                self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
-                self.states_buf[:, obs_end + self.num_actions: obs_end + self.num_actions + 24] = self.spin_axis.repeat(1, 8)
-
-                all_contact = self.contact_tensor.reshape(-1, contacts, 3).clone()
-                all_contact = torch.norm(all_contact, dim=-1).float()
-                all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact), all_contact / 20.0)
-                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + contacts] = all_contact
-                self.states_buf[:, obs_end + self.num_actions + 24 + contacts:
-                                   obs_end + self.num_actions + 24 + contacts + self.num_training_objects] = self.object_one_hot_vector  
-
-                end_pos = obs_end + self.num_actions + 24 + contacts + self.num_training_objects
-                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
-
-            self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                self.arm_hand_dof_lower_limits,
-                                                                self.arm_hand_dof_upper_limits)
-            self.last_obs_buf[:, 0:6] = 0.0
-            self.last_obs_buf[:, 22:45] = 0
-
-            contacts = self.contact_tensor.reshape(-1, contacts, 3).clone() 
-            contacts = contacts[:, self.sensor_handle_indices, :] 
-            tip_contacts = contacts[:, self.fingertip_indices, :]
-
-            contacts = torch.norm(contacts, dim=-1)
-            tip_contacts = torch.norm(tip_contacts, dim=-1)
-            gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
-            tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
-
-            # we use some randomized threshold.
-            # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
-            contacts = torch.where(contacts >= self.contact_thresh, 1.0, 0.0)
-
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
-            self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
-
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
-
-            # random mask out the signal.
-            sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
-            if self.use_disable:
-                sensed_contacts[:, self.disable_sensor_idxes] = 0
-            self.sensed_contacts = sensed_contacts
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_contacts.detach().cpu().numpy()
-
-            self.last_obs_buf[:, 45:61] = sensed_contacts
-            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)
-
-            # Observation randomization.
-            self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
-            self.last_obs_buf[:, 22:23+6] =  0 
-            self.last_obs_buf[:, 23+6:23+22] = unscale(self.prev_targets,
-                                                       self.arm_hand_dof_lower_limits,
-                                                       self.arm_hand_dof_upper_limits)[:, 6:22]
-
-            init_obs_ids = torch.where(self.init_stack_buf == 1)[0]
-            
-            self.init_stack_buf[init_obs_ids] = 0
-            
-            self.obs_buf[init_obs_ids, :-13] = self.last_obs_buf[init_obs_ids].repeat(1, self.n_stack)
-            self.obs_buf = torch.cat((self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim-13]), dim=-1)
-            
-            self.finger_contacts = gt_contacts
-            self.tip_contacts = tip_contacts
-
-            if self.is_distillation:
-                self.student_obs_buf[:, :] = self.obs_buf.clone()
-
-            # add object observation
-            self.obj_buf[:, :7] = self.object_pose
-            self.obj_buf[:, 7:10] = self.object_linvel
-            self.obj_buf[:, 10:13] = self.vel_obs_scale * self.object_angvel
-            self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
-        elif mode == 'fsos':
-            contacts = 48                     # number of contact scalars kept
+        if mode == 'fsos':
+            contact_3d = self.contact_tensor.view(self.num_envs, -1, 3)   # (num_envs, contacts, 3)
+            contacts = contact_3d.size(1)                    # number of contact scalars kept
             # ============================================================ #
             # ---------------- PRIVILEGED  (states_buf) ------------------ #
             # ============================================================ #
@@ -1773,7 +1727,7 @@ class AllegroArmMOAR(VecTask):
                     self.object_one_hot_vector
 
                 end_pos = obs_end + self.num_actions + 24 + contacts + self.num_training_objects
-                self.states_buf[:, end_pos : end_pos + 16] = self.prev_targets[:, 6:22]
+                self.states_buf[:, end_pos : end_pos + 16] = self.prev_targets[:, :]
 
             # ============================================================ #
             # -----------------  POLICY  (last_obs / obs_buf) ------------ #
@@ -1786,35 +1740,35 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 22:45] = 0.0          # zero finger F/T history
 
             # contacts ---------------------------------------------------- #
-            c_t = self.contact_tensor.reshape(-1, contacts, 3).clone()
-            c_t = c_t[:, self.sensor_handle_indices, :]
-            tip_c = c_t[:, self.fingertip_indices, :]
+            # c_t = self.contact_tensor.reshape(-1, contacts, 3).clone()
+            # c_t = c_t[:, self.sensor_handle_indices, :]
+            # tip_c = c_t[:, self.fingertip_indices, :]
 
-            c_mag  = torch.norm(c_t,   dim=-1)
-            tip_c  = torch.norm(tip_c, dim=-1)
-            gt_c   = torch.where(c_mag >= 1.0, 1.0, 0.0).clone()
-            tip_c  = torch.where(tip_c >= 0.5, 1.0, 0.0).clone()
+            # c_mag  = torch.norm(c_t,   dim=-1)
+            # tip_c  = torch.norm(tip_c, dim=-1)
+            # gt_c   = torch.where(c_mag >= 1.0, 1.0, 0.0).clone()
+            # tip_c  = torch.where(tip_c >= 0.5, 1.0, 0.0).clone()
 
-            c_bin = torch.where(c_mag >= self.contact_thresh, 1.0, 0.0)
+            # c_bin = torch.where(c_mag >= self.contact_thresh, 1.0, 0.0)
 
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)
-            self.last_contacts = self.last_contacts * latency + c_bin * (1 - latency)
+            # latency_samples = torch.rand_like(self.last_contacts)
+            # latency = torch.where(latency_samples < self.latency, 1, 0)
+            # self.last_contacts = self.last_contacts * latency + c_bin * (1 - latency)
 
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
-            sensed_c = torch.where(self.last_contacts > 0.1,
-                                   mask * self.last_contacts, self.last_contacts)
+            # mask = torch.rand_like(self.last_contacts)
+            # mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
+            # sensed_c = torch.where(self.last_contacts > 0.1,
+            #                        mask * self.last_contacts, self.last_contacts)
 
-            if self.use_disable:
-                sensed_c[:, self.disable_sensor_idxes] = 0
-            self.sensed_contacts = sensed_c
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_c.detach().cpu().numpy()
+            # if self.use_disable:
+            #     sensed_c[:, self.disable_sensor_idxes] = 0
+            # self.sensed_contacts = sensed_c
+            # if self.cfg["env"]["legacy_obs"] or not self.headless:
+            #     if self.viewer:
+            #         self.debug_contacts = sensed_c.detach().cpu().numpy()
 
             # ------------ indices **UNCHANGED** on policy side ------------
-            self.last_obs_buf[:, 45:61] = sensed_c                 # 16-wide
+            # self.last_obs_buf[:, 45:61] = sensed_c                 # 16-wide
             if self.rotation_axis == "translation":
                 self.last_obs_buf[:, 61:85] = self.translation_axis.repeat(1, 8)
             elif self.rotation_axis == "baseline":
@@ -1872,7 +1826,7 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 29:45] = unscale(
                 self.prev_targets,
                 self.arm_hand_dof_lower_limits,
-                self.arm_hand_dof_upper_limits)[:, 6:22]
+                self.arm_hand_dof_upper_limits)[:, :]
 
             # stacking ----------------------------------------------------- #
             init_ids = torch.where(self.init_stack_buf == 1)[0]
@@ -1881,8 +1835,8 @@ class AllegroArmMOAR(VecTask):
             self.obs_buf = torch.cat(
                 (self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim - 16]), dim=-1)
 
-            self.finger_contacts = gt_c
-            self.tip_contacts    = tip_c
+            # self.finger_contacts = gt_c
+            # self.tip_contacts    = tip_c
             if self.is_distillation:
                 self.student_obs_buf[:, :] = self.obs_buf.clone()
 
@@ -1907,7 +1861,8 @@ class AllegroArmMOAR(VecTask):
             self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
 
         elif mode == 'fspc':
-            contacts = 48
+            contact_3d = self.contact_tensor.view(self.num_envs, -1, 3)   # (num_envs, contacts, 3)
+            contacts = contact_3d.size(1)
             if self.asymmetric_obs:
                 self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
                                                                        self.arm_hand_dof_lower_limits,
@@ -1942,7 +1897,7 @@ class AllegroArmMOAR(VecTask):
                         end_pos = obs_end + self.num_actions + 24 + contacts + 256
                     else:
                         end_pos = obs_end + self.num_actions + 24 + contacts + 32  
-                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
+                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, :]
 
             self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
                                                                 self.arm_hand_dof_lower_limits,
@@ -1950,35 +1905,35 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 0:6] = 0.0
             self.last_obs_buf[:, 22:45] = 0
 
-            contacts = self.contact_tensor.reshape(-1, contacts, 3).clone() 
-            contacts = contacts[:, self.sensor_handle_indices, :]
-            tip_contacts = contacts[:, self.fingertip_indices, :]
+            # contacts = self.contact_tensor.reshape(-1, contacts, 3).clone() 
+            # contacts = contacts[:, self.sensor_handle_indices, :]
+            # tip_contacts = contacts[:, self.fingertip_indices, :]
 
-            contacts = torch.norm(contacts, dim=-1)
-            tip_contacts = torch.norm(tip_contacts, dim=-1)
-            gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
-            tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
+            # contacts = torch.norm(contacts, dim=-1)
+            # tip_contacts = torch.norm(tip_contacts, dim=-1)
+            # gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
+            # tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
 
-            # we use some randomized threshold.
-            # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
-            contacts = torch.where(contacts >= self.contact_thresh, 1.0, 0.0)
+            # # we use some randomized threshold.
+            # # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
+            # contacts = torch.where(contacts >= self.contact_thresh, 1.0, 0.0)
 
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
-            self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
+            # latency_samples = torch.rand_like(self.last_contacts)
+            # latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
+            # self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
 
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
+            # mask = torch.rand_like(self.last_contacts)
+            # mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
 
-            # random mask out the signal.
-            sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
-            if self.use_disable:
-                sensed_contacts[:, self.disable_sensor_idxes] = 0
-            # Do some data augmentation to the contact....
-            self.sensed_contacts = sensed_contacts
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_contacts.detach().cpu().numpy()
+            # # random mask out the signal.
+            # sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
+            # if self.use_disable:
+            #     sensed_contacts[:, self.disable_sensor_idxes] = 0
+            # # Do some data augmentation to the contact....
+            # self.sensed_contacts = sensed_contacts
+            # if self.cfg["env"]["legacy_obs"] or not self.headless:
+            #     if self.viewer:
+            #         self.debug_contacts = sensed_contacts.detach().cpu().numpy()
 
             self.last_obs_buf[:, 45:61] = sensed_contacts
             self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)
@@ -1989,7 +1944,7 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 22:23+6] =  0 
             self.last_obs_buf[:, 23+6:23+22] = unscale(self.prev_targets,
                                                        self.arm_hand_dof_lower_limits,
-                                                       self.arm_hand_dof_upper_limits)[:, 6:22]
+                                                       self.arm_hand_dof_upper_limits)[:, :]
 
             init_obs_ids = torch.where(self.init_stack_buf == 1)
             self.init_stack_buf[init_obs_ids] = 0
@@ -1999,8 +1954,8 @@ class AllegroArmMOAR(VecTask):
                 tmp = 13+32
             self.obs_buf[init_obs_ids][:, :-tmp] = self.last_obs_buf[init_obs_ids].repeat(1, self.n_stack)
             self.obs_buf = torch.cat((self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim-tmp]), dim=-1)
-            self.finger_contacts = gt_contacts
-            self.tip_contacts = tip_contacts
+            # self.finger_contacts = gt_contacts
+            # self.tip_contacts = tip_contacts
 
             if self.is_distillation:
                 self.student_obs_buf[:, :] = self.obs_buf.clone()
@@ -2012,254 +1967,6 @@ class AllegroArmMOAR(VecTask):
                 self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
             else:
                 self.obs_buf = torch.cat((self.obs_buf, self.obj_buf, self.object_class_pc_buf), dim=-1)
-        elif mode == 'pspc':
-            if self.asymmetric_obs:
-                self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                       self.arm_hand_dof_lower_limits,
-                                                                       self.arm_hand_dof_upper_limits)
-                self.states_buf[:, self.num_arm_hand_dofs:2 * self.num_arm_hand_dofs] = self.vel_obs_scale * self.arm_hand_dof_vel
-                self.states_buf[:, 2 * self.num_arm_hand_dofs:3 * self.num_arm_hand_dofs] = self.force_torque_obs_scale * self.dof_force_tensor
-
-                obj_obs_start = 3 * self.num_arm_hand_dofs  # 66
-                self.states_buf[:, obj_obs_start:obj_obs_start + 7] = self.object_pose
-                self.states_buf[:, obj_obs_start + 7:obj_obs_start + 10] = self.object_linvel
-                self.states_buf[:, obj_obs_start + 10:obj_obs_start + 13] = self.vel_obs_scale * self.object_angvel
-
-                obs_end = 79 
-                self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
-                self.states_buf[:, obs_end + self.num_actions: obs_end + self.num_actions + 24] = self.spin_axis.repeat(1, 8)
-
-                all_contact = self.contact_tensor.reshape(-1, 49, 3).clone()
-                all_contact = torch.norm(all_contact, dim=-1).float()
-                all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact), all_contact / 20.0)
-                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + 49] = all_contact
-
-                end_pos = obs_end + self.num_actions + 24 + 49 
-                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
-
-            self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                self.arm_hand_dof_lower_limits,
-                                                                self.arm_hand_dof_upper_limits)
-            self.last_obs_buf[:, 0:6] = 0.0
-            self.last_obs_buf[:, 22:45] = 0
-
-            contacts = self.contact_tensor.reshape(-1, 49, 3).clone()  
-            contacts = contacts[:, self.sensor_handle_indices, :] 
-            tip_contacts = contacts[:, self.fingertip_indices, :]
-
-            contacts = torch.norm(contacts, dim=-1)
-            tip_contacts = torch.norm(tip_contacts, dim=-1)
-            gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
-            tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
-
-            # we use some randomized threshold.
-            # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
-            contacts = torch.where(contacts >= self.contact_thresh, 1.0, 0.0)
-
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
-            self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
-
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
-
-            # random mask out the signal.
-            sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
-            if self.use_disable:
-                sensed_contacts[:, self.disable_sensor_idxes] = 0
-            # Do some data augmentation to the contact....
-            self.sensed_contacts = sensed_contacts
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_contacts.detach().cpu().numpy()
-
-            self.last_obs_buf[:, 45:61] = sensed_contacts
-            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)
-
-            # Observation randomization.
-            self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
-
-            self.last_obs_buf[:, 22:23+6] =  0 
-            self.last_obs_buf[:, 23+6:23+22] = unscale(self.prev_targets,
-                                                       self.arm_hand_dof_lower_limits,
-                                                       self.arm_hand_dof_upper_limits)[:, 6:22]
-
-            init_obs_ids = torch.where(self.init_stack_buf == 1)
-            self.init_stack_buf[init_obs_ids] = 0
-            self.obs_buf[init_obs_ids] = self.last_obs_buf[init_obs_ids].repeat(1, self.n_stack)
-            self.obs_buf = torch.cat((self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim]), dim=-1)
-            self.finger_contacts = gt_contacts
-            self.tip_contacts = tip_contacts
-            if self.is_distillation:
-                self.student_obs_buf[:, :] = self.obs_buf.clone()
-        elif mode == 'fsbd':  # get observation of two baoding balls in hand. 
-            if self.asymmetric_obs:
-                self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                       self.arm_hand_dof_lower_limits,
-                                                                       self.arm_hand_dof_upper_limits)
-                self.states_buf[:, self.num_arm_hand_dofs:2 * self.num_arm_hand_dofs] = self.vel_obs_scale * self.arm_hand_dof_vel
-                self.states_buf[:, 2 * self.num_arm_hand_dofs:3 * self.num_arm_hand_dofs] = self.force_torque_obs_scale * self.dof_force_tensor
-
-                obj_obs_start = 3 * self.num_arm_hand_dofs  # 66
-                self.states_buf[:, obj_obs_start:obj_obs_start + 7 * 2] = self.object_pose.reshape(-1, 7*2)
-                self.states_buf[:, obj_obs_start + 7 * 2:obj_obs_start + 10 * 2] = self.object_linvel.reshape(-1, 3*2)
-                self.states_buf[:, obj_obs_start + 10 * 2:obj_obs_start + 13 * 2] = self.vel_obs_scale * self.object_angvel.reshape(-1, 3*2)
-
-                obs_end = 79+13 
-                self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
-                self.states_buf[:, obs_end + self.num_actions: obs_end + self.num_actions + 24] = self.spin_axis.repeat(1, 8)
-
-                all_contact = self.contact_tensor.reshape(-1, 49, 3).clone()
-                all_contact = torch.norm(all_contact, dim=-1).float()
-                all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact), all_contact / 20.0)
-                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + 49] = all_contact
-                self.states_buf[:, obs_end + self.num_actions + 24 + 49:
-                                   obs_end + self.num_actions + 24 + 49 + self.num_training_objects] = self.object_one_hot_vector.reshape(-1, 2)[:, :1]  
-
-                end_pos = obs_end + self.num_actions + 24 + 49 + self.num_training_objects
-                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
-
-            self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                self.arm_hand_dof_lower_limits,
-                                                                self.arm_hand_dof_upper_limits)
-            self.last_obs_buf[:, 0:6] = 0.0
-            self.last_obs_buf[:, 22:45] = 0
-
-            contacts = self.contact_tensor.reshape(-1, 49, 3).clone()  
-            contacts = contacts[:, self.sensor_handle_indices, :] 
-            tip_contacts = contacts[:, self.fingertip_indices, :]
-
-            contacts = torch.norm(contacts, dim=-1)
-            tip_contacts = torch.norm(tip_contacts, dim=-1)
-            gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
-            tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
-
-            # we use some randomized threshold.
-            # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
-            contacts = torch.where(contacts >= self.contact_thresh, 1.0, 0.0)
-
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
-            self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
-
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
-
-            # random mask out the signal.
-            sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
-            if self.use_disable:
-                sensed_contacts[:, self.disable_sensor_idxes] = 0
-            # Do some data augmentation to the contact....
-            self.sensed_contacts = sensed_contacts
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_contacts.detach().cpu().numpy()
-
-            self.last_obs_buf[:, 45:61] = sensed_contacts
-            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)
-
-            # Observation randomization.
-            self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
-            self.last_obs_buf[:, 22:23+6] =  0
-            self.last_obs_buf[:, 23+6:23+22] = unscale(self.prev_targets,
-                                                       self.arm_hand_dof_lower_limits,
-                                                       self.arm_hand_dof_upper_limits)[:, 6:22]
-
-            init_obs_ids = torch.where(self.init_stack_buf == 1)
-            self.init_stack_buf[init_obs_ids] = 0
-            self.obs_buf[init_obs_ids][:, :-13*2] = self.last_obs_buf[init_obs_ids].repeat(1, self.n_stack)
-            self.obs_buf = torch.cat((self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim-13*2]), dim=-1)
-            self.finger_contacts = gt_contacts
-            self.tip_contacts = tip_contacts
-
-            if self.is_distillation:
-                self.student_obs_buf[:, :] = self.obs_buf.clone()
-
-            # add object observation
-            self.obj_buf[:, :7*2] = self.object_pose.reshape(-1, 7*2)
-            self.obj_buf[:, 7*2:10*2] = self.object_linvel.reshape(-1, 3*2)
-            self.obj_buf[:, 10*2:13*2] = self.vel_obs_scale * self.object_angvel.reshape(-1, 3*2)
-            self.obs_buf = torch.cat((self.obs_buf, self.obj_buf), dim=-1)
-        elif mode == 'psbd':  # get observation of two baoding balls in hand. 
-            if self.asymmetric_obs:
-                self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                       self.arm_hand_dof_lower_limits,
-                                                                       self.arm_hand_dof_upper_limits)
-                self.states_buf[:, self.num_arm_hand_dofs:2 * self.num_arm_hand_dofs] = self.vel_obs_scale * self.arm_hand_dof_vel
-                self.states_buf[:, 2 * self.num_arm_hand_dofs:3 * self.num_arm_hand_dofs] = self.force_torque_obs_scale * self.dof_force_tensor
-
-                obj_obs_start = 3 * self.num_arm_hand_dofs  # 66
-                self.states_buf[:, obj_obs_start:obj_obs_start + 7 * 2] = self.object_pose.reshape(-1, 7*2)
-                self.states_buf[:, obj_obs_start + 7 * 2:obj_obs_start + 10 * 2] = self.object_linvel.reshape(-1, 3*2)
-                self.states_buf[:, obj_obs_start + 10 * 2:obj_obs_start + 13 * 2] = self.vel_obs_scale * self.object_angvel.reshape(-1, 3*2)
-
-                obs_end = 79+13 
-                self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
-                self.states_buf[:, obs_end + self.num_actions: obs_end + self.num_actions + 24] = self.spin_axis.repeat(1, 8)
-
-                all_contact = self.contact_tensor.reshape(-1, 49, 3).clone()
-                all_contact = torch.norm(all_contact, dim=-1).float()
-                all_contact = torch.where(all_contact >= 20.0, torch.ones_like(all_contact), all_contact / 20.0)
-                self.states_buf[:, obs_end + self.num_actions + 24: obs_end + self.num_actions + 24 + 49] = all_contact
-                self.states_buf[:, obs_end + self.num_actions + 24 + 49:
-                                   obs_end + self.num_actions + 24 + 49 + self.num_training_objects] = self.object_one_hot_vector.reshape(-1, 2)[:, :1]  
-
-                end_pos = obs_end + self.num_actions + 24 + 49 + self.num_training_objects
-                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
-
-            self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
-                                                                self.arm_hand_dof_lower_limits,
-                                                                self.arm_hand_dof_upper_limits)
-            self.last_obs_buf[:, 0:6] = 0.0
-            self.last_obs_buf[:, 22:45] = 0
-
-            contacts = self.contact_tensor.reshape(-1, 49, 3).clone()  
-            contacts = contacts[:, self.sensor_handle_indices, :] 
-            tip_contacts = contacts[:, self.fingertip_indices, :]
-
-            contacts = torch.norm(contacts, dim=-1)
-            tip_contacts = torch.norm(tip_contacts, dim=-1)
-            gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
-            tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
-
-            # we use some randomized threshold.
-            # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
-            contacts = torch.where(contacts >= self.contact_thresh, 1.0, 0.0)
-
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
-            self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
-
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
-
-            # random mask out the signal.
-            sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
-            if self.use_disable:
-                sensed_contacts[:, self.disable_sensor_idxes] = 0
-            # Do some data augmentation to the contact....
-            self.sensed_contacts = sensed_contacts
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_contacts.detach().cpu().numpy()
-
-            self.last_obs_buf[:, 45:61] = sensed_contacts
-            self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)
-
-            # Observation randomization.
-            self.last_obs_buf[:, 6:22] += (torch.rand_like(self.last_obs_buf[:, 6:22]) - 0.5) * 2 * 0.06
-            self.last_obs_buf[:, 22:23+6] =  0 
-            self.last_obs_buf[:, 23+6:23+22] = unscale(self.prev_targets,
-                                                       self.arm_hand_dof_lower_limits,
-                                                       self.arm_hand_dof_upper_limits)[:, 6:22]
-
-            init_obs_ids = torch.where(self.init_stack_buf == 1)
-            self.init_stack_buf[init_obs_ids] = 0
-            self.obs_buf[init_obs_ids][:, :] = self.last_obs_buf[init_obs_ids].repeat(1, self.n_stack)
-            self.obs_buf = torch.cat((self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim]), dim=-1)
-            self.finger_contacts = gt_contacts
-            self.tip_contacts = tip_contacts
-
         else:
             if self.asymmetric_obs:
                 self.states_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
@@ -2285,7 +1992,7 @@ class AllegroArmMOAR(VecTask):
                                    obs_end + self.num_actions + 24 + 49 + self.num_training_objects] = self.object_one_hot_vector
 
                 end_pos = obs_end + self.num_actions + 24 + 49 + self.num_training_objects
-                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, 6:22]
+                self.states_buf[:, end_pos:end_pos + 16] = self.prev_targets[:, :]
 
             self.last_obs_buf[:, 0:self.num_arm_hand_dofs] = unscale(self.arm_hand_dof_pos,
                                                                 self.arm_hand_dof_lower_limits,
@@ -2293,37 +2000,37 @@ class AllegroArmMOAR(VecTask):
             self.last_obs_buf[:, 0:6] = 0.0
             self.last_obs_buf[:, 22:45] = 0
 
-            contacts = self.contact_tensor.reshape(-1, 49, 3).clone() 
-            contacts = contacts[:, self.sensor_handle_indices, :] 
-            tip_contacts = contacts[:, self.fingertip_indices, :]
+            # contacts = self.contact_tensor.reshape(-1, 49, 3).clone() 
+            # contacts = contacts[:, self.sensor_handle_indices, :] 
+            # tip_contacts = contacts[:, self.fingertip_indices, :]
 
-            contacts = torch.norm(contacts, dim=-1)
-            tip_contacts = torch.norm(tip_contacts, dim=-1)
-            gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
-            tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
+            # contacts = torch.norm(contacts, dim=-1)
+            # tip_contacts = torch.norm(tip_contacts, dim=-1)
+            # gt_contacts = torch.where(contacts >= 1.0, 1.0, 0.0).clone()
+            # tip_contacts = torch.where(tip_contacts >= 0.5, 1.0, 0.0).clone()
 
-            # we use some randomized threshold.
-            # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
-            contacts = torch.clip(contacts / 30.0, 0.0, 1.0)
+            # # we use some randomized threshold.
+            # # threshold = 0.2 + torch.rand_like(contacts) * self.sensor_thresh
+            # contacts = torch.clip(contacts / 30.0, 0.0, 1.0)
 
-            latency_samples = torch.rand_like(self.last_contacts)
-            latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
-            self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
+            # latency_samples = torch.rand_like(self.last_contacts)
+            # latency = torch.where(latency_samples < self.latency, 1, 0)  # with 0.25 probability, the signal is lagged
+            # self.last_contacts = self.last_contacts * latency + contacts * (1 - latency)
 
-            mask = torch.rand_like(self.last_contacts)
-            mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
+            # mask = torch.rand_like(self.last_contacts)
+            # mask = torch.where(mask < self.sensor_noise, 0.0, 1.0)
 
-            # random mask out the signal.
-            sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
-            if self.use_disable:
-                sensed_contacts[:, self.disable_sensor_idxes] = 0
-            # Do some data augmentation to the contact....
+            # # random mask out the signal.
+            # sensed_contacts = torch.where(self.last_contacts > 0.1, mask * self.last_contacts, self.last_contacts)
+            # if self.use_disable:
+            #     sensed_contacts[:, self.disable_sensor_idxes] = 0
+            # # Do some data augmentation to the contact....
 
-            if self.cfg["env"]["legacy_obs"] or not self.headless:
-                if self.viewer:
-                    self.debug_contacts = sensed_contacts.detach().cpu().numpy()
+            # if self.cfg["env"]["legacy_obs"] or not self.headless:
+            #     if self.viewer:
+            #         self.debug_contacts = sensed_contacts.detach().cpu().numpy()
 
-            self.last_obs_buf[:, 45:61] = sensed_contacts
+            # self.last_obs_buf[:, 45:61] = sensed_contacts
             self.last_obs_buf[:, 61:85] = self.spin_axis.repeat(1, 8)
 
             # Observation randomization.
@@ -2337,8 +2044,8 @@ class AllegroArmMOAR(VecTask):
             self.init_stack_buf[init_obs_ids] = 0
             self.obs_buf[init_obs_ids] = self.last_obs_buf[init_obs_ids].repeat(1, self.n_stack)
             self.obs_buf = torch.cat((self.last_obs_buf.clone(), self.obs_buf[:, :-self.n_obs_dim]), dim=-1)
-            self.finger_contacts = gt_contacts
-            self.tip_contacts = tip_contacts
+            # self.finger_contacts = gt_contacts
+            # self.tip_contacts = tip_contacts
 
     def reset_spin_axis(self, env_ids, init_quat=None):
         env_ids_torch = torch.tensor(env_ids,  device=self.device).long()
@@ -2639,24 +2346,25 @@ class AllegroArmMOAR(VecTask):
                                          (1 + (torch.rand_like(self.relative_scale_tensor) - 0.5) * 0.1)
 
             targets = self.prev_targets + self.relative_scale_tensor * self.actions
+
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(targets,
                                                                           self.arm_hand_dof_lower_limits[
-                                                                              self.actuated_dof_indices],
+                                                                              :, self.actuated_dof_indices],
                                                                           self.arm_hand_dof_upper_limits[
-                                                                              self.actuated_dof_indices])
+                                                                              :, self.actuated_dof_indices])
             self.prev_targets = self.cur_targets.clone()
             self.last_actions = self.actions.clone().to(self.device)
 
         else:
             self.cur_targets[:, self.actuated_dof_indices] = scale(self.actions,
-                                                                   self.arm_hand_dof_lower_limits[self.actuated_dof_indices],
-                                                                   self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
+                                                                   self.arm_hand_dof_lower_limits[:, self.actuated_dof_indices],
+                                                                   self.arm_hand_dof_upper_limits[:, self.actuated_dof_indices])
             self.cur_targets[:, self.actuated_dof_indices] = self.act_moving_average * self.cur_targets[:,self.actuated_dof_indices] + \
                                                              (1.0 - self.act_moving_average) * self.prev_targets[:,self.actuated_dof_indices]
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(
                 self.cur_targets[:, self.actuated_dof_indices],
-                self.arm_hand_dof_lower_limits[self.actuated_dof_indices],
-                self.arm_hand_dof_upper_limits[self.actuated_dof_indices])
+                self.arm_hand_dof_lower_limits[:, self.actuated_dof_indices],
+                self.arm_hand_dof_upper_limits[:, self.actuated_dof_indices])
 
         self.prev_targets[:, self.actuated_dof_indices] = self.cur_targets[:, self.actuated_dof_indices]
         
@@ -2779,32 +2487,32 @@ class AllegroArmMOAR(VecTask):
                                    [p0[0], p0[1], p0[2], objectm[0], objectm[1], objectm[2]], [0.85, 0.1, 0.85])
 
         # We do some debug visualization.
-        if condition:
-            for env in range(len(self.envs)):
-                for i, contact_idx in enumerate(list(self.sensor_handle_indices)):
+        # if condition:
+        #     for env in range(len(self.envs)):
+                # for i, contact_idx in enumerate(list(self.sensor_handle_indices)):
 
-                    if self.debug_contacts[env, i] > 0.0:
-                        self.gym.set_rigid_body_color(self.envs[env], self.arm_hands[env],
-                                                      contact_idx, gymapi.MESH_VISUAL_AND_COLLISION,
-                                                      gymapi.Vec3(0.0, 1.0, 0.0))
-                    else:
-                        self.gym.set_rigid_body_color(self.envs[env], self.arm_hands[env],
-                                                      contact_idx, gymapi.MESH_VISUAL_AND_COLLISION,
-                                                      gymapi.Vec3(1.0, 0.0, 0.0))
+                #     if self.debug_contacts[env, i] > 0.0:
+                #         self.gym.set_rigid_body_color(self.envs[env], self.arm_hands[env],
+                #                                       contact_idx, gymapi.MESH_VISUAL_AND_COLLISION,
+                #                                       gymapi.Vec3(0.0, 1.0, 0.0))
+                #     else:
+                #         self.gym.set_rigid_body_color(self.envs[env], self.arm_hands[env],
+                #                                       contact_idx, gymapi.MESH_VISUAL_AND_COLLISION,
+                #                                       gymapi.Vec3(1.0, 0.0, 0.0))
 
-                import math
-                if self.debug_viz:
-                    if math.fabs(float(self.spin_axis[env, 0])) > 0.0:
-                        color = (0.0, 0.0, 1.0)
-                    elif math.fabs(float(self.spin_axis[env, 1])) > 0.0:
-                        color = (0.0, 1.0, 0.0)
-                    else:
-                        color = (1.0, 0.0, 0.0)
+                # import math
+                # if self.debug_viz:
+                #     if math.fabs(float(self.spin_axis[env, 0])) > 0.0:
+                #         color = (0.0, 0.0, 1.0)
+                #     elif math.fabs(float(self.spin_axis[env, 1])) > 0.0:
+                #         color = (0.0, 1.0, 0.0)
+                #     else:
+                #         color = (1.0, 0.0, 0.0)
 
-                    for i, contact_idx in enumerate(list(self.arm_handle_indices)):
-                        self.gym.set_rigid_body_color(self.envs[env], self.arm_hands[env],
-                                                    contact_idx, gymapi.MESH_VISUAL_AND_COLLISION,
-                                                    gymapi.Vec3(*color))
+                #     for i, contact_idx in enumerate(list(self.arm_handle_indices)):
+                #         self.gym.set_rigid_body_color(self.envs[env], self.arm_hands[env],
+                #                                     contact_idx, gymapi.MESH_VISUAL_AND_COLLISION,
+                #                                     gymapi.Vec3(*color))
 
 
 
@@ -2876,12 +2584,11 @@ def compute_hand_reward_baseline(
         # ――― generic signals (same as translate kernel) ――――――――― #
         rew_buf, reset_buf, progress_buf, successes, consecutive_successes,
         max_episode_length: float,
-        fingertip_pos,                                     # (B,4,3)
         object_pos, object_rot,                            # (B,3) , (B,4)  xyzw
         object_init_pos, object_init_rot,                  # (B,3) , (B,4)
         object_linvel, object_angvel,                      # (B,3) , (B,3)
         target_pos, target_rot,                            # (B,3) , (B,4)
-        finger_contacts, tip_contacts,                     # (B,16),(B,4)
+         tip_contacts,                     # (B,16),(B,4)
         control_error,                                     # (B,)
         actions,                                           # (B,22)
         action_penalty_scale: float,
@@ -2954,15 +2661,15 @@ def compute_hand_reward_baseline(
     # ------------------------------------------------------------ #
     # 4.  Contact & finger shaping (unchanged)                     #
     # ------------------------------------------------------------ #
-    finger_sum   = torch.clip(finger_contacts.sum(-1).float(), 0.0, 5.0)
-    contact_reward = contact_coef * finger_sum
+    # finger_sum   = torch.clip(finger_contacts.sum(-1).float(), 0.0, 5.0)
+    # contact_reward = contact_coef * finger_sum
 
-    if finger_coef > 0.0:
-        obj_rep = object_pos.unsqueeze(1).repeat(1, 4, 1)
-        dist = torch.norm(obj_rep - fingertip_pos, dim=-1)
-        grasp_reward = torch.clip(0.1 / (4 * dist + 0.02), 0, 1).mean(-1) * finger_coef
-    else:
-        grasp_reward = torch.zeros_like(proj)
+    # if finger_coef > 0.0:
+    #     obj_rep = object_pos.unsqueeze(1).repeat(1, 4, 1)
+    #     dist = torch.norm(obj_rep - fingertip_pos, dim=-1)
+    #     grasp_reward = torch.clip(0.1 / (4 * dist + 0.02), 0, 1).mean(-1) * finger_coef
+    # else:
+    #     grasp_reward = torch.zeros_like(proj)
 
     # ------------------------------------------------------------ #
     # 5.  Other penalties                                          #
@@ -2976,7 +2683,7 @@ def compute_hand_reward_baseline(
     rew = ( rot_reward
           #+ drift_pen + tilt_pen
           + vel_pen
-          + contact_reward   + grasp_reward
+        #   + contact_reward   + grasp_reward
           + torque_penalty * torque_coef
           + work_penalty   * work_coef
           + action_pen
@@ -3159,8 +2866,8 @@ def compute_hand_reward_translate(
 def compute_hand_reward_finger(
     spin_coef, aux_coef, main_coef, vel_coef, torque_coef, work_coef, contact_coef, finger_coef,
     rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes,
-    max_episode_length: float, fingertip_pos, object_pos, object_rot, object_init_pos, object_init_rot, object_linvel, object_angvel, target_pos, target_rot,
-    finger_contacts, tip_contacts, contact_scale: float, dist_reward_scale: float, rot_reward_scale: float,  rot_eps: float,
+    max_episode_length: float,  object_pos, object_rot, object_init_pos, object_init_rot, object_linvel, object_angvel, target_pos, target_rot,
+     tip_contacts, contact_scale: float, dist_reward_scale: float, rot_reward_scale: float,  rot_eps: float,
     control_error, control_penalty_scale: float, actions, action_penalty_scale: float,
     success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
     fall_penalty: float, main_vector, spinned_theta, dev_theta, torque_penalty, work_penalty,
@@ -3177,12 +2884,12 @@ def compute_hand_reward_finger(
         object_pos_repeat = torch.cat([object_pos.reshape(-1, 2, 3)[:, 0, :].unsqueeze(1).repeat(1, 4, 1), 
                                         object_pos.reshape(-1, 2, 3)[:, 1, :].unsqueeze(1).repeat(1, 4, 1)], dim=1)
         
-        distance = torch.sqrt(((object_pos_repeat - fingertip_pos.repeat(1, 2, 1)) ** 2).sum(-1))
+        # distance = torch.sqrt(((object_pos_repeat - fingertip_pos.repeat(1, 2, 1)) ** 2).sum(-1))
         
     else:
         object_pos_repeat = object_pos.reshape(-1, 1, 3).repeat(1, 4, 1)
-        distance = torch.sqrt(((object_pos_repeat - fingertip_pos) ** 2).sum(-1))
-    distance_reward = torch.clip(0.1 / (4 * distance + 0.02), 0, 1).mean(-1) * finger_coef
+        # distance = torch.sqrt(((object_pos_repeat - fingertip_pos) ** 2).sum(-1))
+    # distance_reward = torch.clip(0.1 / (4 * distance + 0.02), 0, 1).mean(-1) * finger_coef
 
     inverse_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(object_init_rot)).transpose(1, 2)
     forward_rotation_matrix = transform.quaternion_to_matrix(xyzw_to_wxyz(object_rot))
@@ -3206,13 +2913,13 @@ def compute_hand_reward_finger(
         vel_reward = vel_coef * torch.norm(object_linvel, dim=-1)
     action_penalty = torch.sum(actions ** 2, dim=-1)
 
-    finger_contact_sum = finger_contacts.sum(dim=-1).float()
-    finger_contact_sum = torch.clip(finger_contact_sum, 0.0, 5.0)
+    # finger_contact_sum = finger_contacts.sum(dim=-1).float()
+    # finger_contact_sum = torch.clip(finger_contact_sum, 0.0, 5.0)
 
     # The hand must hold the object. Otherwise it is penalized.
-    contact_reward = finger_contact_sum * contact_coef 
-
-    reward = spin_reward + vel_reward + contact_reward + distance_reward + \
+    # contact_reward = finger_contact_sum * contact_coef 
+    # contact_reward + distance_reward + \
+    reward = spin_reward + vel_reward + \
              torque_penalty * torque_coef + work_penalty * work_coef + \
              action_penalty * action_penalty_scale + control_error * control_penalty_scale  
     # Find out which envs hit the goal and update successes count
@@ -3265,6 +2972,8 @@ def compute_hand_reward_finger(
 
     timed_out = progress_buf >= max_episode_length - 1
     resets = torch.where(timed_out, torch.ones_like(resets), resets)
+    # resets = torch.zeros_like(resets)
+
     num_resets = torch.sum(resets)
     finished_cons_successes = torch.sum(successes * resets.float())
 

@@ -429,6 +429,45 @@ class A2CBase(BaseAlgorithm):
 
 				res_dict = self.model(input_dict)
 			else:
+				# def quat_to_6d(q):
+				# 	"""
+				# 	q  : (B,4)  unit quaternion in *xyzw* order                    <-- check yours!
+				# 	out: (B,6)  Zhou-style 6-D rotation representation
+				# 	"""
+				# 	# --- quaternion -> 3×3 matrix
+				# 	x, y, z, w = q.unbind(-1)                    # split
+				# 	B = q.shape[0]
+				# 	R = torch.empty(B, 3, 3, device=q.device)
+
+				# 	R[:, 0, 0] = 1 - 2*(y*y + z*z)
+				# 	R[:, 0, 1] = 2*(x*y - z*w)
+				# 	R[:, 0, 2] = 2*(x*z + y*w)
+
+				# 	R[:, 1, 0] = 2*(x*y + z*w)
+				# 	R[:, 1, 1] = 1 - 2*(x*x + z*z)
+				# 	R[:, 1, 2] = 2*(y*z - x*w)
+
+				# 	R[:, 2, 0] = 2*(x*z - y*w)
+				# 	R[:, 2, 1] = 2*(y*z + x*w)
+				# 	R[:, 2, 2] = 1 - 2*(x*x + y*y)
+
+				# 	# --- keep the first two columns and flatten
+				# 	return R[..., :2].reshape(B, 6)              # (B,6)
+				# q_goal = input_dict["obs"]["obs"][:, 64:68]          # (B,4) xyzw
+
+				# # convert to 6-D
+				# goal_6d = quat_to_6d(q_goal)                         # (B,6)
+
+				# # tile it four times to fill the 24-slot window 61:85
+				# input_dict["obs"]["obs"][:, 61:85] = goal_6d.repeat(1, 4)   # (B,24)
+
+				# old_data = input_dict["obs"]["obs"][:, -16:]
+				# old_quat = old_data[:, 3:7]
+				# six_quat = quat_to_6d(old_quat) 
+
+				# input_dict["obs"]["obs"][:, -7:] = input_dict["obs"]["obs"][:, -9:-2]
+
+				# input_dict["obs"]["obs"][:, -13:-7] = six_quat
 				res_dict = self.model(input_dict)
 			if self.has_central_value:
 				states = obs['states']

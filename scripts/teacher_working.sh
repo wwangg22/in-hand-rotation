@@ -6,10 +6,10 @@ EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
 
 CUDA_VISIBLE_DEVICES=${GPUS} \
 python ./isaacgymenvs/train.py headless=True \
-task.env.objSet=working task=AllegroArmMOAR task.env.axis=z \
+task.env.objSet=working task=LEAPArmMOAR task.name=LEAPArmMOAR task.env.axis=z \
 task.env.numEnvs=4096 train.params.config.minibatch_size=16384 \
 train.params.config.central_value_config.minibatch_size=16384 \
 task.env.observationType=full_stack_obj_sem task.env.legacy_obs=False \
-task.env.ablation_mode=no-pc experiment=z-axis-working-objsem-w-obj-enc-8-dim \
+task.env.ablation_mode=no-pc experiment=z-axis-working-objsem-w-obj-enc-8-dim-leaphand \
 wandb_activate=True \
 ${EXTRA_ARGS}

@@ -100,6 +100,7 @@ def launch_rlg_hydra(cfg: DictConfig):
         )
 
     def create_env_thunk(**kwargs):
+        print("config task name = ", cfg.task_name)
         envs = isaacgymenvs.make(
             cfg.seed,
             cfg.task_name,

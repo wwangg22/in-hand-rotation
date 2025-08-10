@@ -73,7 +73,7 @@ def get_rlgames_env_creator(
         """
         Creates the task from configurations and wraps it using RL-games wrappers if required.
         """
-
+        print(f"Creating task {task_name} with config:")
         # create native task and pass custom config
         env = isaacgym_task_map[task_name](
             cfg=task_config,
