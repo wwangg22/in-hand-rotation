@@ -355,8 +355,8 @@ class LEAPArmMOAR(VecTask):
             self.obj_init_pos_shift = {"new": [(0.63, 0.01, 0.25), (0.63, -0.02, 0.25)]}
         else:
             self.obj_init_pos_shift = {
-                "org": (0.0, 0.0, 0.09),
-                "new": (0.0, 0.0, 0.09)  
+                "org": (0.0, 0.035, 0.09),
+                "new": (0.0, 0.035, 0.09)  
             }
 
         self.obj_init_type = self.cfg["env"].get("objInit", "org")
@@ -517,7 +517,7 @@ class LEAPArmMOAR(VecTask):
         self.scale_min = 0.90 
         self.scale_max = 1.10
 
-        self.palm_center = torch.tensor([0.63, 1.0681e-04, 1.7850e-01], device="cuda:0") #5.7225e-01
+        self.palm_center = torch.tensor([0.0, 0.035, 0.09], device="cuda:0") #5.7225e-01
 
         self.relative_limit_x = torch.tensor([0.01, -0.01], device="cuda:0") # x can be -0.04, but for stability reason no 
         #real bounds [0.15, -0.05]
@@ -1007,7 +1007,7 @@ class LEAPArmMOAR(VecTask):
             if self.rotation_axis == 'translation' or self.rotation_axis == "baseline":
                 pose_dx = self.palm_center[0] + random.uniform(*self.relative_limit_x.tolist())
                 pose_dy = self.palm_center[1] + random.uniform(*self.relative_limit_y.tolist())
-                pose_dz = self.palm_center[2] + 0.05
+                pose_dz = self.palm_center[2]
             else:
                 pose_dx, pose_dy, pose_dz = self.obj_init_pos_shift[self.obj_init_type]
            
@@ -1112,7 +1112,7 @@ class LEAPArmMOAR(VecTask):
             if self.rotation_axis == "translation":
                 pose_dx = self.palm_center[0] + random.uniform(*self.relative_limit_x.tolist())
                 pose_dy = self.palm_center[1] + random.uniform(*self.relative_limit_y.tolist())
-                pose_dz = self.palm_center[2] + 0.05
+                pose_dz = self.palm_center[2]
                 object_start_pose.p.x = arm_hand_start_pose.p.x + pose_dx
                 object_start_pose.p.y = arm_hand_start_pose.p.y + pose_dy
                 object_start_pose.p.z = arm_hand_start_pose.p.z + pose_dz 
@@ -1130,7 +1130,7 @@ class LEAPArmMOAR(VecTask):
             if self.rotation_axis == "baseline":
                 pose_dx = self.palm_center[0] + random.uniform(*self.relative_limit_x.tolist())
                 pose_dy = self.palm_center[1] + random.uniform(*self.relative_limit_y.tolist())
-                pose_dz = self.palm_center[2] + 0.05
+                pose_dz = self.palm_center[2]
                 object_start_pose.p.x = arm_hand_start_pose.p.x + pose_dx
                 object_start_pose.p.y = arm_hand_start_pose.p.y + pose_dy
                 object_start_pose.p.z = arm_hand_start_pose.p.z + pose_dz 
@@ -1472,11 +1472,11 @@ class LEAPArmMOAR(VecTask):
                     self.rew_buf, self.reset_buf, self.progress_buf,
                     self.successes, self.consecutive_successes,
                     float(self.max_episode_length),
-                    self.fingertip_pos, self.object_pos, self.object_rot,
+                    self.object_pos, self.object_rot,
                     self.object_init_pos, self.object_init_quat,
                     self.object_linvel, self.object_angvel,
                     self.goal_pos, self.goal_rot,
-                    self.finger_contacts, self.tip_contacts,
+                    self.tip_contacts,
                     self.control_error, self.actions, self.action_penalty_scale,
                     self.success_tolerance, self.fall_dist, self.fall_penalty,
                     torque_penalty, work_penalty,
@@ -2751,12 +2751,11 @@ def compute_hand_reward_translate(
         # --- generic buffers / signals (shape follows your spin kernel) ----- #
         rew_buf, reset_buf, progress_buf, successes, consecutive_successes,
         max_episode_length   : float,
-        fingertip_pos,                       # (B,4,3)
         object_pos, object_rot,              # (B,3) , (B,4)  xyzw
         object_init_pos, object_init_rot,    # (B,3) , (B,4)
         object_linvel, object_angvel,        # (B,3) , (B,3)
         target_pos, target_rot,              # (B,3) , (B,4)  (updated every interval)
-        finger_contacts, tip_contacts,       # (B,16) , (B,4)
+        tip_contacts,       # (B,16) , (B,4)
         control_error,                       # (B,)
         actions,                             # (B,22)
         action_penalty_scale : float,
@@ -2800,15 +2799,15 @@ def compute_hand_reward_translate(
     # ---------------------------------------------------------------------- #
     # 5.  Contact & finger rewards (same pattern as spin kernel)
     # ---------------------------------------------------------------------- #
-    finger_sum   = torch.clip(finger_contacts.sum(-1).float(), 0.0, 5.0)
-    contact_reward = contact_coef * finger_sum
+    # finger_sum   = torch.clip(finger_contacts.sum(-1).float(), 0.0, 5.0)
+    # contact_reward = contact_coef * finger_sum
 
-    if finger_coef > 0.0:
-        obj_rep = object_pos.unsqueeze(1).repeat(1, 4, 1)              # (B,4,3)
-        dist = torch.norm(obj_rep - fingertip_pos, dim=-1)             # (B,4)
-        grasp_reward = torch.clip(0.1 / (4 * dist + 0.02), 0, 1).mean(-1) * finger_coef
-    else:
-        grasp_reward = torch.zeros_like(proj)
+    # if finger_coef > 0.0:
+    #     obj_rep = object_pos.unsqueeze(1).repeat(1, 4, 1)              # (B,4,3)
+    #     dist = torch.norm(obj_rep - fingertip_pos, dim=-1)             # (B,4)
+    #     grasp_reward = torch.clip(0.1 / (4 * dist + 0.02), 0, 1).mean(-1) * finger_coef
+    # else:
+    #     grasp_reward = torch.zeros_like(proj)
 
     # ---------------------------------------------------------------------- #
     # 6.  Action / torque / work penalties  (pre‑computed inputs)
@@ -2824,8 +2823,8 @@ def compute_hand_reward_translate(
           + drift_pen
           + rot_pen
           + vel_pen
-          + contact_reward
-          + grasp_reward
+        #   + contact_reward
+        #   + grasp_reward
           + torque_penalty * torque_coef
           + work_penalty   * work_coef
           + action_pen
@@ -2842,10 +2841,10 @@ def compute_hand_reward_translate(
     # ---------------------------------------------------------------------- #
     fall = object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)
     timed_out = progress_buf >= max_episode_length - 1
-    resets = torch.where(fall | timed_out | (object_pos[:,0] < 0.52),
+    resets = torch.where(fall | timed_out,
                          torch.ones_like(reset_buf),
                          torch.zeros_like(reset_buf))
-    rew = torch.where((object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)) | (object_pos[:,0] < 0.52), rew + fall_penalty, rew)
+    rew = torch.where((object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)), rew + fall_penalty, rew)
     
     reset_buf[:] = resets
     rew_buf[:] = rew
@@ -2874,8 +2873,11 @@ def compute_hand_reward_finger(
     max_consecutive_successes: int, av_factor: float, ignore_z_rot: bool, object_set_id: str
 ):
     # Distance from the hand to the object
+
+    # palm_center = palm_center.unsqueeze(0)
+
     goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
-    goal_z = torch.abs(object_pos[..., 2] - target_pos[..., 2])
+    goal_z = goal_dist #torch.abs(object_pos[..., 2] - target_pos[..., 2])
 
     if ignore_z_rot:
         success_tolerance = 2.0 * success_tolerance
