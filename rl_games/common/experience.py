@@ -299,6 +299,8 @@ class ExperienceBuffer:
         self.horizon_length = algo_info['horizon_length']
         self.has_central_value = algo_info['has_central_value']
         self.use_action_masks = algo_info.get('use_action_masks', False)
+        self.hybrid = algo_info.get('hybrid', False)
+        # print("ExperienceBuffer hybrid model? ", self.hybrid)
         batch_size = self.num_actors * self.num_agents
         self.is_discrete = False
         self.is_multi_discrete = False
@@ -345,6 +347,9 @@ class ExperienceBuffer:
             self.tensor_dict['actions'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=self.actions_shape, dtype=np.float32), obs_base_shape)
             self.tensor_dict['mus'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=self.actions_shape, dtype=np.float32), obs_base_shape)
             self.tensor_dict['sigmas'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=self.actions_shape, dtype=np.float32), obs_base_shape)
+        if self.hybrid:
+            self.tensor_dict['categorical_actions'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=2,shape=(), dtype=np.uint8), obs_base_shape)
+
 
     def _init_from_aux_dict(self, tensor_dict):
         obs_base_shape = self.obs_base_shape

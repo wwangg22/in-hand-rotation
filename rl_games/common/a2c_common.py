@@ -21,6 +21,7 @@ from tensorboardX import SummaryWriter
 import torch
 from torch import nn
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from time import sleep
 
@@ -372,18 +373,11 @@ class A2CBase(BaseAlgorithm):
 
 				# deep copies so nested tensors are independent
 				rotation_input    = copy.deepcopy(input_dict)
-				translation_input = copy.deepcopy(input_dict)
+				# translation_input = copy.deepcopy(input_dict)
 
 				x = rotation_input['obs']['obs']
 				B, device = x.shape[0], x.device
 
-				rotation_input   ['obs']['obs'][:, 61:85] = \
-					torch.tensor([0,0,1], device=device).repeat(B, 8)
-				translation_input['obs']['obs'][:, 61:85] = \
-					torch.tensor([0,-1,0], device=device).repeat(B, 8)
-
-				rotation_res_dict    = self.rotation_policy(rotation_input, encode_state=input_dict["obs"]["obs"][:, 61:77])
-				translation_res_dict = self.translation_policy(translation_input)
 				def quat_to_6d(q):
 					"""
 					q  : (B,4)  unit quaternion in *xyzw* order                    <-- check yours!
@@ -414,20 +408,56 @@ class A2CBase(BaseAlgorithm):
 				q_goal = input_dict["obs"]["obs"][:, 64:68]          # (B,4) xyzw
 
 				# convert to 6-D
-				goal_6d = quat_to_6d(q_goal)                         # (B,6)
+				# goal_6d = q_goal                         # (B,6)
 
 				# tile it four times to fill the 24-slot window 61:85
-				input_dict["obs"]["obs"][:, 61:85] = goal_6d.repeat(1, 4)   # (B,24)
 
 				old_data = input_dict["obs"]["obs"][:, -16:]
 				old_quat = old_data[:, 3:7]
-				six_quat = quat_to_6d(old_quat) 
+				curr_quat = F.normalize(old_quat, dim=-1)
+				goal_quat = F.normalize(q_goal, dim=-1)
 
-				input_dict["obs"]["obs"][:, -7:] = input_dict["obs"]["obs"][:, -9:-2]
+				def quat_conj(q):
+					x,y,z,w = q.unbind(-1)
+					return torch.stack([-x,-y,-z,w], dim=-1)
 
-				input_dict["obs"]["obs"][:, -13:-7] = six_quat
+				def quat_mul(q1,q2):
+					x1,y1,z1,w1 = q1.unbind(-1)
+					x2,y2,z2,w2 = q2.unbind(-1)
+					return torch.stack([
+						w1*x2 + x1*w2 + y1*z2 - z1*y2,
+						w1*y2 - x1*z2 + y1*w2 + z1*x2,
+						w1*z2 + x1*y2 - y1*x2 + z1*w2,
+						w1*w2 - x1*x2 - y1*y2 - z1*z2
+					], dim=-1)
+				rel_quat = quat_mul(goal_quat, quat_conj(curr_quat))  # (B,4)
+				# flip sign so scalar part ≥ 0 (removes 360° jump)
+				rel_quat = torch.where(rel_quat[:,3:4] < 0, -rel_quat, rel_quat)
+				input_dict["obs"]["obs"][:, 61:73] = goal_quat.repeat(1, 3)   # (B,24)
+				input_dict["obs"]["obs"][:, 73:85] = rel_quat.repeat(1, 3)   # (B,16)
+
+				# six_quat = quat_to_6d(old_quat) 
+
+				# input_dict["obs"]["obs"][:, -7:] = input_dict["obs"]["obs"][:, -9:-2]
+
+				# input_dict["obs"]["obs"][:, -13:-7] = six_quat
 
 				res_dict = self.model(input_dict)
+				actions_cat = res_dict['categorical_actions']
+
+				pos_row = torch.tensor([0,0, 1], device=device).repeat(8).unsqueeze(0).expand(B, -1)
+				neg_row = torch.tensor([0,0,-1], device=device).repeat(8).unsqueeze(0).expand(B, -1)
+
+				mask = (actions_cat.long() > 1).view(-1, 1)          # [B,1] bool
+
+				rotation_input   ['obs']['obs'][:, 61:85] = \
+					torch.where(mask, pos_row, neg_row)
+				# translation_input['obs']['obs'][:, 61:85] = \
+				# 	torch.tensor([0,-1,0], device=device).repeat(B, 8)
+
+				rotation_res_dict    = self.rotation_policy(rotation_input, encode_state=input_dict["obs"]["obs"][:, 61:77])
+				# translation_res_dict = self.translation_policy(translation_input)
+				translation_res_dict = {}
 			else:
 				# def quat_to_6d(q):
 				# 	"""
@@ -557,21 +587,29 @@ class A2CBase(BaseAlgorithm):
 			'use_action_masks' : self.use_action_masks
 		}
 		if self.high_level_planner:
-			self.env_info['action_space'] = gym.spaces.Box(
-				low  = -1.0,
-				high =  1.0,
-				shape = (24,),                  # (23,)
-				dtype = np.float32
-			)
+			algo_info = {
+				'num_actors' : self.num_actors,
+				'horizon_length' : self.horizon_length,
+				'has_central_value' : self.has_central_value,
+				'use_action_masks' : self.use_action_masks,
+				'hybrid': True,
+			}
+		# if self.high_level_planner:
+		# 	self.env_info['action_space'] = gym.spaces.Box(
+		# 		low  = -1.0,
+		# 		high =  1.0,
+		# 		shape = (18,),                  # (23,)
+		# 		dtype = np.float32
+		# 	)
 		self.experience_buffer = ExperienceBuffer(self.env_info, algo_info, self.ppo_device)
 	
-		if self.high_level_planner:
-			self.env_info['action_space'] = gym.spaces.Box(
-				low  = -1.0,
-				high =  1.0,
-				shape = (22,),                  # (22,)
-				dtype = np.float32
-			)
+		# if self.high_level_planner:
+		# 	self.env_info['action_space'] = gym.spaces.Box(
+		# 		low  = -1.0,
+		# 		high =  1.0,
+		# 		shape = (16,),                  # (22,)
+		# 		dtype = np.float32
+		# 	)
 
 		val_shape = (self.horizon_length, batch_size, self.value_size)
 		current_rewards_shape = (batch_size, self.value_size)
@@ -835,23 +873,16 @@ class A2CBase(BaseAlgorithm):
 					'sigmas': sigma
 				}"""
 				# last action determins mixture
-				raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
-				raw_control = res_dict['actions'][:, -2:-1]          # (N, act_dim-2)
-				w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
-				gate = (raw_control > 0).float()
-				residual = res_dict['actions'][:, :-2]         # (N, act_dim)
-				# final_actions = (
-				# 	raw_control * (translation_res_dict['actions'] * (1.0 - w) +
-				# 	rotation_res_dict['actions']    * w )        +
-				# 	residual
-				# )
+				
+				residual = res_dict['actions']
+				actions_cat = res_dict['categorical_actions']
+				mask = (actions_cat.long() == 0).view(-1, 1)          # [B,1] bool
+
 				final_actions = (
-					((gate )* rotation_res_dict['actions'] )        +
+					((mask)* rotation_res_dict['actions'] )        +
 					residual 
 				)
 				
-
-				# overwrite for env_step
 				res_dict['actions'] = final_actions
 			step_time_start = time.time()
 			self.obs, rewards, self.dones, infos = self.env_step(res_dict['actions'])
@@ -998,6 +1029,8 @@ class DiscreteA2CBase(A2CBase):
 		self.update_list = ['actions', 'neglogpacs', 'values']
 		if self.use_action_masks:
 			self.update_list += ['action_masks']
+		if self.high_level_planner:
+			self.update_list += ['categorical_actions']
 		self.tensor_list = self.update_list + ['obses', 'states', 'dones']
 
 	def train_epoch(self):
@@ -1265,6 +1298,8 @@ class ContinuousA2CBase(A2CBase):
 	def init_tensors(self):
 		A2CBase.init_tensors(self)
 		self.update_list = ['actions', 'neglogpacs', 'values', 'mus', 'sigmas']
+		if self.high_level_planner:
+			self.update_list += ['categorical_actions']
 		self.tensor_list = self.update_list + ['obses', 'states', 'dones']
 
 	def train_epoch(self):
@@ -1342,6 +1377,8 @@ class ContinuousA2CBase(A2CBase):
 		dones = batch_dict['dones']
 		values = batch_dict['values']
 		actions = batch_dict['actions']
+		if self.high_level_planner:
+			cat_actions = batch_dict['categorical_actions']
 		neglogpacs = batch_dict['neglogpacs']
 		mus = batch_dict['mus']
 		sigmas = batch_dict['sigmas']
@@ -1383,6 +1420,8 @@ class ContinuousA2CBase(A2CBase):
 		dataset_dict['rnn_masks'] = rnn_masks
 		dataset_dict['mu'] = mus
 		dataset_dict['sigma'] = sigmas
+		if self.high_level_planner:
+			dataset_dict['categorical_actions'] = cat_actions
 
 		self.dataset.update_values_dict(dataset_dict)
 

@@ -17,6 +17,8 @@ import torch.optim as optim
 from torch.utils.data.sampler import BatchSampler, SequentialSampler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import torch.nn.functional as F
+
 
 from rl_games.algos_torch import model_builder
 from rl_games.algos_torch import central_value
@@ -195,8 +197,8 @@ class DistillWarmUpTrainer:
 
             self.translation_policy = self.teacher_network.build(build_config)
             self.translation_policy.to(self.device)
-            self.rotation_policy_ckpt_path = "/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth"
-            self.translation_policy_ckpt_path = "/home/william/Downloads/last_translation-working-obj-8-dim_ep_24000_rew_22.384708.pth"
+            self.rotation_policy_ckpt_path = "/home/william/Downloads/last_z-axis-leaphand_ep_11000_rew_240.02551.pth"
+            self.translation_policy_ckpt_path = "/home/william/Downloads/last_z-axis-leaphand_ep_11000_rew_240.02551.pth"
             
             if self.rotation_policy_ckpt_path is not None:
                 print("Loading rotation policy from", self.rotation_policy_ckpt_path)
@@ -216,17 +218,17 @@ class DistillWarmUpTrainer:
                 net.eval()                  # optional: deterministic BN / Dropout
             
             high_level_build_config = {
-                'actions_num' : self.actions_num+2,#for high level we control mixture between rotation and translation and also residual actions
+                'actions_num' : self.actions_num,#for high level we control mixture between rotation and translation and also residual actions
                 'input_shape' : self.teacher_obs_shape,
                 'num_seqs' : self.num_actors * self.num_agents,
                 'value_size': self.env_info.get('value_size',1),
                 'normalize_value' : self.normalize_value,
                 'normalize_input': self.normalize_input,
+                'hybrid': True,
+                'hybrid_discrete_dim': 3,
             }
             self.teacher_actor_critic = self.teacher_network.build(high_level_build_config)
             self.teacher_actor_critic.to(self.device)
-            
-            
         else:
             self.teacher_actor_critic = self.teacher_network.build(self.teacher_build_config)
             self.teacher_actor_critic.to(self.device)
@@ -417,25 +419,14 @@ class DistillWarmUpTrainer:
             if self.high_level_planner:
                 self.rotation_policy.eval()
                 self.translation_policy.eval()
+
                 # deep copies so nested tensors are independent
                 rotation_input    = copy.deepcopy(input_dict)
-                translation_input = copy.deepcopy(input_dict)
+                # translation_input = copy.deepcopy(input_dict)
 
                 x = rotation_input['obs']['obs']
                 B, device = x.shape[0], x.device
 
-                rotation_input   ['obs']['obs'][:, 61:85] = \
-                    torch.tensor([0,0,1], device=device).repeat(B, 8)
-                translation_input['obs']['obs'][:, 61:85] = \
-                    torch.tensor([0,-1,0], device=device).repeat(B, 8)
-
-                rotation_res_dict    = self.rotation_policy(rotation_input, encode_state=input_dict["obs"]["obs"][:, 61:77])
-                translation_res_dict = self.translation_policy(translation_input)
-
-                # input_dict["obs"]["obs"][:, 61:85] = \
-                # 	rotation_res_dict['encoded_latent'].repeat(1,3) #rotation_res_dict is size (b, 8)
-                # input_dict["obs"]["obs"][:, 61:85] = \
-                #     input_dict["obs"]["obs"][:, 64:68].repeat(1,6) #rotation_res_dict is size (b, 8)
                 def quat_to_6d(q):
                     """
                     q  : (B,4)  unit quaternion in *xyzw* order                    <-- check yours!
@@ -466,19 +457,62 @@ class DistillWarmUpTrainer:
                 q_goal = input_dict["obs"]["obs"][:, 64:68]          # (B,4) xyzw
 
                 # convert to 6-D
-                goal_6d = quat_to_6d(q_goal)                         # (B,6)
+                goal_6d = q_goal                         # (B,6)
 
-                # tile it four times to fill the 24-slot window 61:85
-                input_dict["obs"]["obs"][:, 61:85] = goal_6d.repeat(1, 4)   # (B,24)
+                # old_data = input_dict["obs"]["obs"][:, -16:]
+                # old_quat = old_data[:, 3:7]
+                # six_quat = quat_to_6d(old_quat) 
 
                 old_data = input_dict["obs"]["obs"][:, -16:]
                 old_quat = old_data[:, 3:7]
-                six_quat = quat_to_6d(old_quat) 
+                curr_quat = F.normalize(old_quat, dim=-1)
+                goal_quat = F.normalize(q_goal, dim=-1)
 
-                input_dict["obs"]["obs"][:, -7:] = input_dict["obs"]["obs"][:, -9:-2]
+                def quat_conj(q):
+                    x,y,z,w = q.unbind(-1)
+                    return torch.stack([-x,-y,-z,w], dim=-1)
 
-                input_dict["obs"]["obs"][:, -13:-7] = six_quat
-                res_dict = model(input_dict)
+                def quat_mul(q1,q2):
+                    x1,y1,z1,w1 = q1.unbind(-1)
+                    x2,y2,z2,w2 = q2.unbind(-1)
+                    return torch.stack([
+                        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+                        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+                        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+                        w1*w2 - x1*x2 - y1*y2 - z1*z2
+                    ], dim=-1)
+                rel_quat = quat_mul(goal_quat, quat_conj(curr_quat))  # (B,4)
+                # flip sign so scalar part ≥ 0 (removes 360° jump)
+                rel_quat = torch.where(rel_quat[:,3:4] < 0, -rel_quat, rel_quat)
+                input_dict["obs"]["obs"][:, 61:73] = goal_quat.repeat(1, 3)   # (B,24)
+                input_dict["obs"]["obs"][:, 73:85] = rel_quat.repeat(1, 3)   # (B,16)
+
+
+                # tile it four times to fill the 24-slot window 61:85
+                input_dict["obs"]["obs"][:, 61:85] = goal_6d.repeat(1, 6)   # (B,24)
+
+                
+
+                # input_dict["obs"]["obs"][:, -7:] = input_dict["obs"]["obs"][:, -9:-2]
+
+                # input_dict["obs"]["obs"][:, -13:-7] = six_quat
+
+                res_dict = self.teacher_actor_critic(input_dict)
+                actions_cat = res_dict['categorical_actions']
+
+                pos_row = torch.tensor([0,0, 1], device=device).repeat(8).unsqueeze(0).expand(B, -1)
+                neg_row = torch.tensor([0,0,-1], device=device).repeat(8).unsqueeze(0).expand(B, -1)
+
+                mask = (actions_cat.long() > 1).view(-1, 1)          # [B,1] bool
+
+                rotation_input   ['obs']['obs'][:, 61:85] = \
+                    torch.where(mask, pos_row, neg_row)
+                # translation_input['obs']['obs'][:, 61:85] = \
+                # 	torch.tensor([0,-1,0], device=device).repeat(B, 8)
+
+                rotation_res_dict    = self.rotation_policy(rotation_input, encode_state=input_dict["obs"]["obs"][:, 61:77])
+                # translation_res_dict = self.translation_policy(translation_input)
+                translation_res_dict = {}
             else:
                 def quat_to_6d(q):
                     """
@@ -1083,25 +1117,16 @@ class DistillWarmUpTrainer:
                 #     translation_res_dict['actions'] * (1.0 - w) +
                 #     rotation_res_dict['actions']    * w         +
                 #     residual
-                # )
-            # last action determins mixture
-                raw_w = res_dict['actions'][:, -1:]          # (N,1) keep 2-D for broadcast
-                raw_control = res_dict['actions'][:, -2:-1]          # (N, act_dim-2)
-                # w = torch.clamp(raw_w, 0.0, 1.0)         # or torch.sigmoid(raw_w)
-                # print(raw_control.mean())
-                gate_rot  = (raw_control > 0).float()          # 1 ⇒ use rotation
-                gate_trans = (raw_w > 0).float() * (1.0 - gate_rot)
-                residual = res_dict['actions'][:, :-2]         # (N, act_dim)
-                # print(gate_rot.mean())
-                # actions = (
-                #     (translation_res_dict['actions'] * gate_trans +
-                #     rotation_res_dict['actions']    * gate_rot )        +
-                #     residual
-                # )
+                residual = res_dict['actions']
+                actions_cat = res_dict['categorical_actions']
+                mask = (actions_cat.long() == 0).view(-1, 1)          # [B,1] bool
+
                 actions = (
-                	(gate_rot * rotation_res_dict['actions'] )        +
-                	residual 
+                    ((mask)* rotation_res_dict['actions'] )        +
+                    residual 
                 )
+
+                # res_dict['actions'] = final_actions
 
             else:
                 res     = self.get_action_values(net, teacher_obs, mode="teacher")

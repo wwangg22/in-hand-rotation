@@ -7,8 +7,8 @@ EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
 
 CUDA_VISIBLE_DEVICES=${GPUS} \
 python ./isaacgymenvs/train.py headless=True \
-task.env.objSet=custom task=AllegroArmMOAR task.env.axis=custom \
-task.env.numEnvs=8192 train.params.config.minibatch_size=16384 \
+task.env.objSet=custom task=LEAPArmMOAR task.name=LEAPArmMOAR task.env.axis=custom \
+task.env.numEnvs=2048 train.params.config.minibatch_size=16384 \
 train.params.config.central_value_config.minibatch_size=16384 \
 task.env.observationType=full_stack_pointcloud task.env.legacy_obs=True \
 task.env.ablation_mode=none experiment=custom-powerdrill \

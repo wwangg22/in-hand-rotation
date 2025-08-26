@@ -47,8 +47,8 @@ env:
   handInit: "default"
   numEnvs: ${resolve_default:16,${...num_envs}} 
   prog_coef: 1.8
-  drift_coef: -0.0
-  rot_coef: -0.00
+  drift_coef: -0.2
+  rot_coef: -0.01
   envSpacing: 0.75
   episodeLength: 400 #200
   enableDebugVis: False

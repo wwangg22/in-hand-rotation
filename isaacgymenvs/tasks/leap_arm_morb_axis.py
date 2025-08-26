@@ -2564,6 +2564,20 @@ def angdiff(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """
     d = a - b
     return (d + math.pi) % (2 * math.pi) - math.pi
+
+# Helpers (TorchScript-friendly), xyzw quaternions
+@torch.jit.script
+def _q_normalize_xyzw(q: torch.Tensor) -> torch.Tensor:  # (...,4)
+    return q / (q.norm(p=2, dim=-1, keepdim=True) + 1e-8)
+
+@torch.jit.script
+def _so3_geodesic_angle_xyzw(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+    # angle in [0, pi], invariant to double-cover by |dot|
+    q1n = _q_normalize_xyzw(q1)
+    q2n = _q_normalize_xyzw(q2)
+    dot = torch.sum(q1n * q2n, dim=-1).abs().clamp(0.0, 1.0)
+    return 2.0 * torch.acos(dot)
+
 #####################################################################
 #  Baseline: rotate about Z *and* translate                         #
 #####################################################################
@@ -2629,19 +2643,26 @@ def compute_hand_reward_baseline(
 
     # # smooth, jump-free reward in [-coef, +coef]
     # rot_reward = (rot_closeness_coef * (1.0 - torch.abs(yaw_error) / math.pi))**2
-    eps = 1e-4  # small value to avoid division by zero
-    x, y, z, w = object_rot.unbind(-1)
-    yaw_now  = torch.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+    # eps = 1e-4  # small value to avoid division by zero
+    # x, y, z, w = object_rot.unbind(-1)
+    # yaw_now  = torch.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
 
-    xi, yi, zi, wi = object_init_rot.unbind(-1)
-    yaw_init = torch.atan2(2*(wi*zi + xi*yi), 1 - 2*(yi*yi + zi*zi))
+    # xi, yi, zi, wi = object_init_rot.unbind(-1)
+    # yaw_init = torch.atan2(2*(wi*zi + xi*yi), 1 - 2*(yi*yi + zi*zi))
 
-    yaw_delta  = angdiff(yaw_now, yaw_init)                  # (B,)
-    yaw_error  = angdiff(yaw_delta, rotation_target)         # signed error
+    # yaw_delta  = angdiff(yaw_now, yaw_init)                  # (B,)
+    # yaw_error  = angdiff(yaw_delta, rotation_target)         # signed error
 
-    rot_dist   = torch.abs(yaw_error)                        # d(q_t, q_goal)
-    rot_reward = 1.0 / (rot_dist + eps)                      # 1/(d+ε)
-    rot_reward = rot_reward * 0.1
+    # rot_dist   = torch.abs(yaw_error)                        # d(q_t, q_goal)
+    # rot_reward = 1.0 / (rot_dist + eps)                      # 1/(d+ε)
+    # rot_reward = rot_reward * 0.1
+
+    theta = _so3_geodesic_angle_xyzw(object_rot, target_rot)      # (B,), rad
+
+    # Smooth bounded alignment reward: exp(-theta^2 / (2*sigma^2))
+    sigma = 10.0 * 3.14159265 / 180.0  # ~10 degrees in rad; tune
+    rot_align = torch.exp(-(theta * theta) / (2.0 * sigma * sigma))
+    rot_reward = rot_closeness_coef * rot_align
     # print("rot_reward ", rot_reward[0])
 
     # ------------------------------------------------------------ #
@@ -2693,24 +2714,24 @@ def compute_hand_reward_baseline(
     # ------------------------------------------------------------ #
     # 7.  Reset conditions                                         #
     # ------------------------------------------------------------ #
-    fall   = (object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist)) | (object_pos[:, 0] < 0.56)
-    off_yaw= torch.abs(yaw_error) > success_tolerance
+    fall   = (object_pos[:, 2] < (object_init_pos[:, 2] - fall_dist))
+    # off_yaw= torch.abs(yaw_error) > success_tolerance
     timed  = progress_buf >= max_episode_length - 1
 
     resets = torch.where(fall | timed, torch.ones_like(reset_buf), reset_buf)
     rew    = torch.where(fall, rew + fall_penalty, rew)
     bonus_tol_rad = math.radians(5.0)  # 5 degrees in radians
-    bonus_coef = 10000
+    bonus_coef = 500
 
-    close_yaw = torch.abs(yaw_error) < bonus_tol_rad     # e.g. bonus_tol_rad = 5° ≈ 0.0873
-    give_bonus = timed & (~fall) & close_yaw             # ONLY when timed-out cleanly
+    # close_yaw = torch.abs(yaw_error) < bonus_tol_rad     # e.g. bonus_tol_rad = 5° ≈ 0.0873
+    # give_bonus = timed & (~fall)            # ONLY when timed-out cleanly
 
-    super_bonus = torch.where(
-        give_bonus,
-        torch.full_like(rew, bonus_coef),                # constant bonus
-        torch.zeros_like(rew)
-    )
-    rew = rew + super_bonus
+    # super_bonus = torch.where(
+    #     give_bonus,
+    #     torch.full_like(rew, bonus_coef),                # constant bonus
+    #     torch.zeros_like(rew)
+    # )
+    rew = rew #+ super_bonus
 
     # axis_body = torch.tensor([1., 0., 0.], device=object_rot.device)  # body +X
     # z_val = torch.abs(body_axis_world_z(object_rot, axis_body))          # (B,)

@@ -1,5 +1,5 @@
 GPUS=$1
-CKPT=/home/william/Downloads/last_z-axis-working-objsem-w-obj-enc-8-dim_ep_6000_rew_1713.696.pth
+CKPT=/home/william/Downloads/last_z-axis-leaphand_ep_11000_rew_240.02551.pth
 len=${#array[@]}
 EXTRA_ARGS=${array[@]:1:$len}
 EXTRA_ARGS_SLUG=${EXTRA_ARGS// /_}
@@ -11,6 +11,7 @@ task.env.numEnvs=64 train.params.config.minibatch_size=1 \
 train.params.config.central_value_config.minibatch_size=1 \
 task.env.observationType=full_stack_obj_sem task.env.legacy_obs=False \
 test=True \
+checkpoint=${CKPT} \
 task.env.ablation_mode=no-pc experiment=z-axis-working \
 wandb_activate=False \
 ${EXTRA_ARGS}

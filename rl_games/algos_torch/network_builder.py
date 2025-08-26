@@ -237,7 +237,10 @@ class A2CBuilder(NetworkBuilder):
             input_shape = kwargs.pop('input_shape')
             self.value_size = kwargs.pop('value_size', 1)
             self.num_seqs = num_seqs = kwargs.pop('num_seqs', 1)
+            
             NetworkBuilder.BaseNetwork.__init__(self)
+            self.hybrid = kwargs.pop('hybrid', False)
+            self.hybrid_discrete_dim = kwargs.pop('hybrid_discrete_dim', 0)
             self.load(params)
             self.actor_cnn = nn.Sequential()
             self.critic_cnn = nn.Sequential()
@@ -337,6 +340,8 @@ class A2CBuilder(NetworkBuilder):
                     self.sigma = nn.Parameter(torch.zeros(actions_num, requires_grad=True, dtype=torch.float32), requires_grad=True)
                 else:
                     self.sigma = torch.nn.Linear(out_size, actions_num)
+            if self.hybrid:
+                self.logits = torch.nn.Linear(out_size, self.hybrid_discrete_dim)
 
             mlp_init = self.init_factory.create(**self.initializer)
             if self.has_cnn:
@@ -521,6 +526,9 @@ class A2CBuilder(NetworkBuilder):
                         sigma = self.sigma_act(self.sigma)
                     else:
                         sigma = self.sigma_act(self.sigma(out))
+                    if self.hybrid:
+                        logits = self.logits(out)
+                        return logits, mu, mu*0 + sigma, value, states, latent_vec, encoded_latent
                     return mu, mu*0 + sigma, value, states, latent_vec, encoded_latent
 
         def is_separate_critic(self):

@@ -58,13 +58,16 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
                 net.eval()                  # optional: deterministic BN / Dropout
             
             high_level_build_config = {
-                'actions_num' : self.actions_num+2,#for high level we control mixture between rotation and translation and also residual actions
+                'actions_num' : self.actions_num,#for high level we control mixture between rotation and translation and also residual actions
                 'input_shape' : main_shape,
                 'num_seqs' : self.num_actors * self.num_agents,
                 'value_size': self.env_info.get('value_size',1),
                 'normalize_value' : self.normalize_value,
                 'normalize_input': self.normalize_input,
                 '6d_quat': True,
+                'hybrid': True,
+                'hybrid_discrete_dim': 3,
+
             }
             self.model = self.network.build(high_level_build_config)
             self.model.to(self.ppo_device)
@@ -137,6 +140,8 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
         old_sigma_batch = input_dict['sigma']
         return_batch = input_dict['returns']
         actions_batch = input_dict['actions']
+        if self.high_level_planner:
+            cat_actions_batch = input_dict['categorical_actions']
         if self.distill:
             assert isinstance(input_dict['obs'], dict)
             obs_batch = {'obs': input_dict['obs']['student_obs'], 'pointcloud': input_dict['obs']['pointcloud']}  # input_dict['obs']['student_obs']
@@ -155,6 +160,8 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
             'prev_actions': actions_batch, 
             'obs' : obs_batch,
         }
+        if self.high_level_planner:
+            batch_dict['prev_actions_cat'] = cat_actions_batch
 
         rnn_masks = None
         if self.is_rnn:
@@ -172,6 +179,8 @@ class A2CAgent(a2c_common.ContinuousA2CBase):
             entropy = res_dict['entropy']
             mu = res_dict['mus']
             sigma = res_dict['sigmas']
+            if self.high_level_planner:
+                logits = res_dict['logits']
 
             a_loss = self.actor_loss_func(old_action_log_probs_batch, action_log_probs, advantage, self.ppo, curr_e_clip)
 
