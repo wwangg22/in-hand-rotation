@@ -249,7 +249,9 @@ class A2CBuilder(NetworkBuilder):
             
             if isinstance(input_shape, dict):
                 #print(params.keys())
+
                 input_shape = (input_shape['obs'][0] + 32,) # 16 more from latent_dim - in_dim
+
                 #if params.pointnet == "medium":
                 #    self.pc_encoder = PointNetMedium(point_channel=5)
                 #elif params.pointnet == "large":
