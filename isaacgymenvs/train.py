@@ -28,7 +28,8 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
+import numpy as np          # first import of NumPy
+np.float = float
 import datetime
 import isaacgym
 
@@ -99,6 +100,7 @@ def launch_rlg_hydra(cfg: DictConfig):
         )
 
     def create_env_thunk(**kwargs):
+        print("config task name = ", cfg.task_name)
         envs = isaacgymenvs.make(
             cfg.seed,
             cfg.task_name,

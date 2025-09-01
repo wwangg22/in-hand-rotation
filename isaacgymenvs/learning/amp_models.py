@@ -44,9 +44,11 @@ class ModelAMPContinuous(ModelA2CContinuousLogStd):
         normalize_value = config.get('normalize_value', False)
         normalize_input = config.get('normalize_input', False)
         value_size = config.get('value_size', 1)
+        hybrid=config.get('hybrid', False)
+
 
         return self.Network(net, obs_shape=obs_shape,
-            normalize_value=normalize_value, normalize_input=normalize_input, value_size=value_size)
+            normalize_value=normalize_value, normalize_input=normalize_input, value_size=value_size, hybrid=hybrid)
 
 
     class Network(ModelA2CContinuousLogStd.Network):

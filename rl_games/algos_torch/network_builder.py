@@ -168,6 +168,61 @@ class NetworkBuilder:
                     layers.append(torch.nn.BatchNorm2d(in_channels))  
             return nn.Sequential(*layers)
 
+class ObjectEncoder(nn.Module):
+    """
+    Tiny MLP that turns a flat vector of privileged state features
+    (pose, velocity, mass, inertia, …) into a bounded latent z.
+
+    Args
+    ----
+    in_dim : int
+        Number of input scalars.
+    latent_dim : int, optional
+        Size of the encoded embedding (default: 32).
+    hidden_dims : tuple[int], optional
+        Hidden‑layer sizes (default: (128, 64)).
+    activation : nn.Module, optional
+        Non‑linearity to use after each linear layer (default: nn.ReLU).
+    dropout : float, optional
+        Dropout probability applied after activations (default: 0.0).
+    use_layernorm : bool, optional
+        Insert LayerNorm after each linear layer (default: True).
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        latent_dim: int = 32,
+        hidden_dims = (128, 64),
+        activation=nn.ReLU,
+        dropout: float = 0.0,
+        use_layernorm: bool = True,
+    ):
+        super().__init__()
+
+        layers = []
+        prev_dim = in_dim
+        for h in hidden_dims:
+            layers.append(nn.Linear(prev_dim, h))
+            if use_layernorm:
+                layers.append(nn.LayerNorm(h))
+            layers.append(activation())
+            if dropout > 0.0:
+                layers.append(nn.Dropout(dropout))
+            prev_dim = h
+
+        # final projection → latent and bound it to [‑1, 1] via tanh
+        layers.append(nn.Linear(prev_dim, latent_dim))
+        layers.append(nn.Tanh())
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x : (B, in_dim) tensor
+        returns : (B, latent_dim) tensor
+        """
+        return self.net(x)
 
 class A2CBuilder(NetworkBuilder):
     def __init__(self, **kwargs):
@@ -182,7 +237,10 @@ class A2CBuilder(NetworkBuilder):
             input_shape = kwargs.pop('input_shape')
             self.value_size = kwargs.pop('value_size', 1)
             self.num_seqs = num_seqs = kwargs.pop('num_seqs', 1)
+            
             NetworkBuilder.BaseNetwork.__init__(self)
+            self.hybrid = kwargs.pop('hybrid', False)
+            self.hybrid_discrete_dim = kwargs.pop('hybrid_discrete_dim', 0)
             self.load(params)
             self.actor_cnn = nn.Sequential()
             self.critic_cnn = nn.Sequential()
@@ -191,20 +249,26 @@ class A2CBuilder(NetworkBuilder):
             
             if isinstance(input_shape, dict):
                 #print(params.keys())
-                input_shape = (input_shape['obs'][0] + 256,) #32,)
+
+                input_shape = (input_shape['obs'][0] + 32,) # 16 more from latent_dim - in_dim
+
                 #if params.pointnet == "medium":
                 #    self.pc_encoder = PointNetMedium(point_channel=5)
                 #elif params.pointnet == "large":
                 #    self.pc_encoder = PointNetLarge(point_channel=5)
                 #else:
                 print("Creating PointNet with point_channel=3")
-                self.pc_encoder = PointNet(point_channel=6 ) # 3, output_dim=32)
+                self.pc_encoder = PointNet(point_channel=3, output_dim=32) #6)
+                self.object_enc = ObjectEncoder(
+                    in_dim = 16,
+                    latent_dim = 8,
+                )
 
             if self.has_cnn:
                 if self.permute_input:
                     input_shape = torch_ext.shape_whc_to_cwh(input_shape)
                 cnn_args = {
-                    'ctype' : self.cnn['type'], 
+                    'ctype' : self.cnn['tres_dict = model(input_dict)ype'], 
                     'input_shape' : input_shape, 
                     'convs' :self.cnn['convs'], 
                     'activation' : self.cnn['activation'], 
@@ -278,6 +342,8 @@ class A2CBuilder(NetworkBuilder):
                     self.sigma = nn.Parameter(torch.zeros(actions_num, requires_grad=True, dtype=torch.float32), requires_grad=True)
                 else:
                     self.sigma = torch.nn.Linear(out_size, actions_num)
+            if self.hybrid:
+                self.logits = torch.nn.Linear(out_size, self.hybrid_discrete_dim)
 
             mlp_init = self.init_factory.create(**self.initializer)
             if self.has_cnn:
@@ -300,13 +366,23 @@ class A2CBuilder(NetworkBuilder):
                 else:
                     sigma_init(self.sigma.weight)  
 
-        def forward(self, obs_dict):
+        def forward(self, obs_dict, latent=None, encode_state=None):
             if isinstance(obs_dict['obs'], dict):
+                #create a torch tensor with shape obs_dict but add 16 dim on the last dimension
+                obs_shape = list(obs_dict['obs']['obs'].shape)
+                new_obs = torch.zeros(*obs_shape, device=obs_dict['obs']['obs'].device, dtype=obs_dict['obs']['obs'].dtype)
                 obs = obs_dict['obs']['obs']
+                new_obs[:, :-16] = obs[:, :-16]
+
+                latent_vec = self.object_enc(obs[:, -16:]) if latent is None else latent
+                
+                new_obs[:, -16:-8] = latent_vec 
+
+                encoded_latent = self.object_enc(encode_state) if encode_state is not None else None
                 # print(obs.shape, obs_dict['obs']['pointcloud'].shape)
                 pc_embedding, self.point_indices = self.pc_encoder(obs_dict['obs']['pointcloud'])
                 # print(pc_embedding.shape)
-                obs = torch.cat([obs, pc_embedding], dim=-1)
+                obs = torch.cat([new_obs, pc_embedding], dim=-1)
             else:
                 obs = obs_dict['obs']
             states = obs_dict.get('rnn_states', None)
@@ -452,8 +528,11 @@ class A2CBuilder(NetworkBuilder):
                         sigma = self.sigma_act(self.sigma)
                     else:
                         sigma = self.sigma_act(self.sigma(out))
-                    return mu, mu*0 + sigma, value, states
-                    
+                    if self.hybrid:
+                        logits = self.logits(out)
+                        return logits, mu, mu*0 + sigma, value, states, latent_vec, encoded_latent
+                    return mu, mu*0 + sigma, value, states, latent_vec, encoded_latent
+
         def is_separate_critic(self):
             return self.separate
 

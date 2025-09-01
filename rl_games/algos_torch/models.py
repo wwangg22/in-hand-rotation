@@ -74,16 +74,19 @@ class BaseModel():
         normalize_value = config.get('normalize_value', False)
         normalize_input = config.get('normalize_input', False)
         value_size = config.get('value_size', 1)
+        hybrid=config.get('hybrid', False)
+
         return self.Network(self.network_builder.build(self.model_class, **config), obs_shape=obs_shape,
-            normalize_value=normalize_value, normalize_input=normalize_input, value_size=value_size)
+            normalize_value=normalize_value, normalize_input=normalize_input, value_size=value_size, hybrid=hybrid)
 
 class BaseModelNetwork(nn.Module):
-    def __init__(self, obs_shape, normalize_value, normalize_input, value_size):
+    def __init__(self, obs_shape, normalize_value, normalize_input, value_size, hybrid):
         nn.Module.__init__(self)
         self.obs_shape = obs_shape
         self.normalize_value = normalize_value
         self.normalize_input = normalize_input
         self.value_size = value_size
+        self.hybrid = hybrid
 
         if normalize_value:
             self.value_mean_std = RunningMeanStd((self.value_size,))
@@ -356,50 +359,107 @@ class ModelA2CContinuousLogStd(BaseModel):
         def get_default_rnn_state(self):
             return self.a2c_network.get_default_rnn_state()
 
-        def forward(self, input_dict):
+        def forward(self, input_dict, latent=None, encode_state=None):
             is_train = input_dict.get('is_train', True)
             prev_actions = input_dict.get('prev_actions', None)
+            prev_actions_cat = input_dict.get('prev_actions_cat', None)
 
             if isinstance(input_dict['obs'], dict):
                 input_dict['obs']['obs'] = self.norm_obs(input_dict['obs']['obs'])
             else:
                 input_dict['obs'] = self.norm_obs(input_dict['obs'])
-           
-            mu, logstd, value, states = self.a2c_network(input_dict)
-            
+            if self.hybrid:
+                logits, mu, logstd, value, states, latent_vec, encoded_latent = self.a2c_network(input_dict, latent=latent, encode_state=encode_state)
+            else:
+                mu, logstd, value, states, latent_vec, encoded_latent = self.a2c_network(input_dict, latent=latent, encode_state=encode_state)
             sigma = torch.exp(logstd)
             distr = torch.distributions.Normal(mu, sigma)
+            if self.hybrid:
+                dist_cat = torch.distributions.Categorical(logits=logits)       # NEW: single discrete head (B,3)
             
             if is_train:
-                entropy = distr.entropy().sum(dim=-1)
-                prev_neglogp = self.neglogp(prev_actions, mu, sigma, logstd)
-                result = {
-                    'prev_neglogp': torch.squeeze(prev_neglogp),
-                    'values': value,
-                    'entropy': entropy,
-                    'rnn_states': states,
-                    'mus': mu,
-                    'sigmas': sigma
-                }
+                if self.hybrid:
+                    entropy_cont = distr.entropy().sum(dim=-1)
+                    entropy_cat  = dist_cat.entropy()
+                    entropy = entropy_cont + entropy_cat
+                    prev_neglogp_cont = self.neglogp(prev_actions, mu, sigma, logstd)
+                    if prev_actions_cat is not None:
+                        cat_logp_prev = dist_cat.log_prob(prev_actions_cat.long())
+                    else:
+                        cat_logp_prev = torch.zeros_like(prev_neglogp_cont)
+                    prev_neglogp = prev_neglogp_cont - cat_logp_prev
+
+                    result = {
+                        'prev_neglogp': torch.squeeze(prev_neglogp),
+                        'values': value,
+                        'entropy': entropy,
+                        'rnn_states': states,
+                        'mus': mu,
+                        'sigmas': sigma,
+                        'logits': logits,
+                        'latent_vec': latent_vec.detach() if latent_vec is not None else None,
+                        'encoded_latent': encoded_latent.detach() if encoded_latent is not None else None
+                    }
+                else:
+                    entropy = distr.entropy().sum(dim=-1)
+                    prev_neglogp = self.neglogp(prev_actions, mu, sigma, logstd)
+                
+                    result = {
+                        'prev_neglogp': torch.squeeze(prev_neglogp),
+                        'values': value,
+                        'entropy': entropy,
+                        'rnn_states': states,
+                        'mus': mu,
+                        'sigmas': sigma,
+                        'latent_vec': latent_vec.detach() if latent_vec is not None else None,
+                        'encoded_latent': encoded_latent.detach() if encoded_latent is not None else None
+                    }
                 return result
             else:
-                selected_action = distr.sample()
-                neglogp = self.neglogp(selected_action, mu, sigma, logstd)
+                if self.hybrid:  
+                    selected_action = distr.sample()
+                    selected_action_cat = dist_cat.sample()
+                    neglogp_cont = self.neglogp(selected_action, mu, sigma, logstd)
+                    if prev_actions_cat is not None:
+                        cat_logp_prev = dist_cat.log_prob(prev_actions_cat.long())
+                    else:
+                        cat_logp_prev = torch.zeros_like(neglogp_cont)
+                    neglogp = neglogp_cont - cat_logp_prev
 
-                result = {
-                    'neglogpacs': torch.squeeze(neglogp),
-                    'values': self.unnorm_value(value),
-                    'actions': selected_action,
-                    'rnn_states': states,
-                    'mus': mu,
-                    'sigmas': sigma
-                }
+                    result = {
+                        'neglogpacs': torch.squeeze(neglogp),
+                        'values': self.unnorm_value(value),
+                        'actions': selected_action,
+                        'categorical_actions': selected_action_cat,
+                        'rnn_states': states,
+                        'mus': mu,
+                        'sigmas': sigma,
+                        'logits': logits,
+                        'latent_vec': latent_vec.detach() if latent_vec is not None else None,
+                        'encoded_latent': encoded_latent.detach() if encoded_latent is not None else None
+                    }
+                else:
+                    selected_action = distr.sample()
+                    neglogp = self.neglogp(selected_action, mu, sigma, logstd)
+
+                    result = {
+                        'neglogpacs': torch.squeeze(neglogp),
+                        'values': self.unnorm_value(value),
+                        'actions': selected_action,
+                        'rnn_states': states,
+                        'mus': mu,
+                        'sigmas': sigma,
+                        'latent_vec': latent_vec.detach() if latent_vec is not None else None,
+                        'encoded_latent': encoded_latent.detach() if encoded_latent is not None else None
+                    }
+
                 return result
 
         def neglogp(self, x, mean, std, logstd):
             return 0.5 * (((x - mean) / std) ** 2).sum(dim=-1) \
                    + 0.5 * np.log(2.0 * np.pi) * x.size()[-1] \
-                   + logstd.sum(dim=-1)
+                   + logstd.sum(dim=-1)                   + logstd.sum(dim=-1)
+
 
 
 class ModelCentralValue(BaseModel):

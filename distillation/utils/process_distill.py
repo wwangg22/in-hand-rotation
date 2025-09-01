@@ -14,6 +14,7 @@ def process_distill_trainer(env, cfg_train, teacher_logdir, student_logdir, teac
     learn_cfg = cfg_train["learn"]
     is_testing = learn_cfg["test"]
     teacher_resume = cfg_train["teacher_resume"]
+    high_level_planner = cfg_train.get("high_level_planner", False)
 
     if bc_training == "warmup":
         distill_trainer = DistillWarmUpTrainer(
@@ -60,6 +61,7 @@ def process_distill_trainer(env, cfg_train, teacher_logdir, student_logdir, teac
             warmup_mode=warmup_mode,
             ablation_mode=ablation_mode,
             student_resume = cfg_train.get("student_resume", "None"),
+            high_level_planner=high_level_planner,
         )
     # elif bc_training == "collect":
     else:

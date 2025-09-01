@@ -72,6 +72,7 @@ def make(
     #     for key, val in update_dict:
     #         prefix = []
     #         if val in
+    print("Task Name", cfg_dict['name'])
 
     create_rlgpu_env = get_rlgames_env_creator(
         seed=seed,
